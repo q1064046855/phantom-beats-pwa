@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<script>
+  // 移动端检测：触屏 / 无鼠标 / 小屏 视为手机
+  window.__PB_MOBILE = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || Math.min(innerWidth, innerHeight) < 600;
+</script>
+<title>幻彩律动 · PHANTOM BEATS</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:100%;height:100%;overflow:hidden;background:#000;color:#fff;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;-webkit-user-select:none;user-select:none}
+  canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block}
+
+  #ui{
+    position:fixed;left:20px;bottom:20px;
+    background:rgba(8,8,14,0.72);
+    border:1px solid rgba(255,255,255,0.10);
+    border-radius:14px;
+    backdrop-filter:blur(14px) saturate(160%);
+    -webkit-backdrop-filter:blur(14px) saturate(160%);
+    padding:14px 16px;
+    width:min(560px, calc(100vw - 40px));
+    max-height:calc(100vh - 40px);
+    overflow-y:auto;
+    transition:opacity .25s, transform .25s;
+    z-index:10;
+    box-shadow:0 12px 36px rgba(0,0,0,.5);
+  }
+  #ui:not(.pinned){opacity:0;transform:translateY(20px);pointer-events:none}
+  #ui.pinned{opacity:1}
+  #ui .row{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:6px 0}
+  #ui .row + .row{border-top:1px dashed rgba(255,255,255,.08)}
+  #ui .lab{font-size:11px;color:rgba(255,255,255,.55);letter-spacing:.1em;min-width:72px}
+
+  .shape-badge{
+    display:inline-flex;align-items:center;gap:6px;
+    background:rgba(120,200,255,.18);
+    border:1px solid rgba(120,200,255,.55);
+    color:#fff;
+    padding:5px 12px;border-radius:14px;
+    font-size:12.5px;letter-spacing:.04em;
+    box-shadow:0 0 10px rgba(120,200,255,.3);
+  }
+  .shape-badge::before{
+    content:"";width:6px;height:6px;border-radius:50%;
+    background:#7ec8ff;
+    box-shadow:0 0 6px rgba(120,200,255,.8);
+  }
+
+  #ui select{
+    background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.16);
+    color:#fff;
+    padding:5px 10px;border-radius:8px;font-size:12px;cursor:pointer;
+    outline:none;
+  }
+  #ui select:focus{border-color:rgba(120,200,255,.7)}
+
+  .seg{display:inline-flex;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.10);border-radius:8px;overflow:hidden}
+  .seg-btn{
+    background:transparent;border:0;color:rgba(255,255,255,.6);
+    padding:5px 12px;font-size:12px;cursor:pointer;
+  }
+  .seg-btn.active{background:rgba(120,200,255,.25);color:#fff}
+
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;
+    width:140px;height:4px;background:rgba(255,255,255,.15);
+    border-radius:2px;outline:none;cursor:pointer;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;appearance:none;
+    width:14px;height:14px;border-radius:50%;
+    background:#7ec8ff;cursor:pointer;
+    box-shadow:0 0 8px rgba(120,200,255,.6);
+  }
+  input[type=range]::-moz-range-thumb{
+    width:14px;height:14px;border-radius:50%;background:#7ec8ff;border:0;cursor:pointer;
+  }
+  .v{font-size:11px;color:rgba(255,255,255,.7);min-width:36px;text-align:right;font-variant-numeric:tabular-nums}
+
+  #hint{
+    position:fixed;left:50%;top:18%;transform:translateX(-50%);
+    font-size:14px;color:rgba(255,255,255,.85);
+    background:rgba(0,0,0,.4);padding:10px 18px;border-radius:22px;
+    backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+    z-index:5;transition:opacity .6s;pointer-events:none;
+  }
+  #hint.hide{opacity:0}
+
+  #status{
+    position:fixed;left:20px;top:18px;
+    font-size:12px;color:rgba(180,220,255,.85);
+    background:rgba(0,0,0,.35);padding:6px 12px;border-radius:18px;
+    backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+    z-index:6;pointer-events:none;
+    transition:opacity .3s;
+  }
+  #status:empty{display:none}
+
+  .btn{
+    background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.16);
+    color:#fff;padding:6px 14px;border-radius:8px;
+    font-size:12px;cursor:pointer;
+  }
+  .btn:hover{background:rgba(255,255,255,.12)}
+
+  #fileInput{display:none}
+
+  #showBtn{
+    position:fixed;left:20px;bottom:20px;z-index:11;
+    display:none;
+  }
+  #showBtn.show{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="status"></div>
+
+<div id="hint">点屏幕关闭提示 · 左下角为控制台 · 可用麦克风 / 本地文件 / 演示 · 手机上「系统音频」不可用</div>
+
+<div id="ui" class="pinned">
+
+  <div class="row">
+    <span class="lab">音源 SOURCE</span>
+    <div class="seg" id="sourceSeg">
+      <button class="seg-btn active" data-source="system">系统音频</button>
+      <button class="seg-btn" data-source="file">本地文件</button>
+      <button class="seg-btn" data-source="mic">麦克风</button>
+      <button class="seg-btn" data-source="demo">演示</button>
+    </div>
+    <input type="file" id="fileInput" accept="audio/*">
+  </div>
+
+  <div class="row">
+    <span class="lab">形态 SHAPE</span>
+    <span class="shape-badge">镜像波形 · 三频律动</span>
+  </div>
+
+  <div class="row">
+    <span class="lab">配色 COLOR</span>
+    <select id="color">
+      <option value="rainbow" selected>自动·幻彩</option>
+      <option value="neon">霓虹紫蓝</option>
+      <option value="fire">烈焰红橙</option>
+      <option value="aurora">极光青绿</option>
+      <option value="gold">迷幻金紫</option>
+    </select>
+  </div>
+
+  <div class="row">
+    <span class="lab">灵敏度</span>
+    <input type="range" id="sens" min="0.5" max="3" step="0.05" value="1.4">
+    <span class="v" id="sensV">1.40</span>
+    <span class="lab">平滑</span>
+    <input type="range" id="smooth" min="0" max="0.95" step="0.01" value="0.42">
+    <span class="v" id="smoothV">0.42</span>
+  </div>
+
+  <div class="row">
+    <span class="lab">辉光</span>
+    <input type="range" id="glow" min="0" max="3" step="0.05" value="1.4">
+    <span class="v" id="glowV">1.40</span>
+    <span class="lab">线宽</span>
+    <input type="range" id="lw" min="0.5" max="4" step="0.1" value="1.6">
+    <span class="v" id="lwV">1.60</span>
+  </div>
+
+  <div class="row">
+    <button class="btn" id="fsBtn">⛶ 全屏</button>
+    <button class="btn" id="pinBtn">📌 固定面板</button>
+    <button class="btn" id="hideBtn">🙈 隐藏</button>
+  </div>
+
+</div>
+
+<button id="showBtn" class="btn">⚙ 控制面板</button>
+
+<script src="app.js"></script>
+<script>
+  // 移动端：隐藏不可用的「系统音频」，默认演示（免权限即可看到动画）
+  if (window.__PB_MOBILE) {
+    document.addEventListener('DOMContentLoaded', function () {
+      var sys = document.querySelector('#sourceSeg .seg-btn[data-source="system"]');
+      if (sys) sys.style.display = 'none';
+      var demo = document.querySelector('#sourceSeg .seg-btn[data-source="demo"]');
+      if (demo) demo.click();
+    });
+  }
+  // 注册 Service Worker（PWA 可安装 + 离线）
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function (e) { console.warn('SW 注册失败', e); });
+    });
+  }
+</script>
+</body>
+</html>

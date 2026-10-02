@@ -1,0 +1,11 @@
+# 本地自签证书（私钥不应进公开仓库；本地方式 B 仍可在磁盘使用）
+cert.pem
+key.pem
+openssl.cnf
+# 运行日志
+server.log
+server.err
+# Python / 系统
+__pycache__/
+*.pyc
+.DS_Store
