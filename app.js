@@ -61,6 +61,8 @@ const state = {
   bpm: 0,                // 估算节拍(BPM)，驱动星空飞行速度
   lastBeatTime: 0,       // 上次节拍时间戳(s)
   demoT: 0,
+  gate: 1,              // 静音门限：0=三线压回中线(闭合)，1=正常
+  _nf: 0,               // 噪声地板(缓慢跟踪最安静时的能量)
 };
 let t = 0, lastTs = performance.now();
 
@@ -227,13 +229,13 @@ function drawMirror(){
   const cy = H * 0.5;
   // 低音 → 平滑镜像波带
   const arrBass = subMirrorSpec(state.spec, 0, state.spec.length*0.12);
-  mirrorStrokeWave(arrBass, cy, H * 0.34, true, 0, 60, state.lw * 1.7, state.glow);
+  mirrorStrokeWave(arrBass, cy, H * 0.34, true, 0, 60, state.lw * 1.7, state.glow, state.gate);
   // 中音 → 平滑镜像
   const arrMid = subMirrorSpec(state.spec, state.spec.length*0.12, state.spec.length*0.45);
-  mirrorStrokeWave(arrMid, cy, H * 0.22, true, 90, 90, state.lw * 1.3, state.glow);
+  mirrorStrokeWave(arrMid, cy, H * 0.22, true, 90, 90, state.lw * 1.3, state.glow, state.gate);
   // 高音 → 平滑镜像
   const arrHi  = subMirrorSpec(state.spec, state.spec.length*0.45, state.spec.length);
-  mirrorStrokeWave(arrHi, cy, H * 0.14, true, 200, 130, state.lw, state.glow);
+  mirrorStrokeWave(arrHi, cy, H * 0.14, true, 200, 130, state.lw, state.glow, state.gate);
 }
 
 function subMirrorSpec(s, a, b){
@@ -243,7 +245,7 @@ function subMirrorSpec(s, a, b){
   return out;
 }
 
-function mirrorStrokeWave(arr, cy, amp, mirror, hOff, hSpan, lw, glow){
+function mirrorStrokeWave(arr, cy, amp, mirror, hOff, hSpan, lw, glow, gate){
   const n = arr.length; if (n < 2) return;
   const x0 = W*0.04, x1 = W*0.96;
   ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -256,7 +258,7 @@ function mirrorStrokeWave(arr, cy, amp, mirror, hOff, hSpan, lw, glow){
     ctx.beginPath();
     for (let i = 0; i < n; i++){
       const x = x0 + (i/(n-1)) * (x1 - x0);
-      const y = cy + dir * arr[i] * amp;
+      const y = cy + dir * arr[i] * amp * (gate === undefined ? 1 : gate);
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
@@ -296,6 +298,13 @@ function update(){
   // 音色纯度 = 高音占比 (treble 越突出 → 音色越纯净)
   const total = state.bass + state.mid + state.treble + 0.0001;
   state.purity = Math.min(1, (state.treble / total) * 2.0);
+
+  // --- 静音门限：自适应噪声地板，无音乐时把三线压回中线(闭合) ---
+  if (state._nf === 0) state._nf = state.level;
+  state._nf = state._nf * 0.995 + state.level * 0.005;   // 缓慢跟随最安静时的能量
+  const over = state.level - state._nf;                  // 高出噪声地板的部分
+  const targetGate = over > 0.006 ? 1 : 0;
+  state.gate += (targetGate - state.gate) * (targetGate > state.gate ? 0.35 : 0.04);
 
   // --- BPM / 节拍跟踪（驱动星空旋转速度）---
   const now = performance.now() / 1000;
@@ -537,6 +546,8 @@ function reflectPanel(){
 pinBtn.addEventListener('click', () => { pinned = !pinned; reflectPanel(); });
 hideBtn.addEventListener('click', () => { pinned = false; reflectPanel(); });
 showBtn.addEventListener('click', () => { pinned = true; reflectPanel(); });
+// 手机上默认隐藏控制台，保证全屏沉浸；点「⚙ 控制面板」再展开
+if (window.__PB_MOBILE) { pinned = false; reflectPanel(); }
 
 // 自动隐藏提示
 setTimeout(() => hint && hint.classList.add('hide'), 4000);

@@ -13,11 +13,29 @@
 ## 安装方式（二选一）
 
 ### 方式 A：GitHub Pages（推荐，最稳，约 2 分钟）
-1. 在 GitHub 新建一个仓库（如 `phantom-beats-pwa`）。
-2. 把本目录全部文件（`index.html` `app.js` `manifest.webmanifest` `sw.js` `icon-*.png` 等）推上去。
+#### 最简单：一键脚本（仓库已 git 初始化并提交）
+1. 在 GitHub 建一个 **Personal Access Token（classic）**：
+   GitHub 右上角头像 → Settings → Developer settings → Personal access tokens → Tokens (classic)
+   → Generate new token → 勾选 **repo**（含 public_repo / pages:write）→ Generate → 复制以 `ghp_` 开头的令牌。
+2. 在本文件夹（`phantom-beats-pwa`）打开终端（PowerShell），运行：
+   ```powershell
+   .\deploy.ps1 -User 你的GitHub用户名 -Token 你的PAT
+   ```
+   脚本会**自动**建公开仓库、推送 main 分支、开启 Pages，并打印访问地址。
+   （令牌仅在本地使用，不会写入任何提交的文件；不要在聊天里粘贴令牌。）
+3. 等 1–2 分钟 Pages 构建完，用**手机 Chrome** 打开 `https://<用户名>.github.io/phantom-beats-pwa/`，
+   点 ⋮ → **「添加到主屏幕」**即安装。
+
+#### 或手动操作
+1. 在 GitHub 新建一个**空**仓库（如 `phantom-beats-pwa`，不要勾 README）。
+2. 终端里：
+   ```powershell
+   git remote add origin https://<USER>:<TOKEN>@github.com/<USER>/phantom-beats-pwa.git
+   git branch -M main
+   git push -u origin main
+   ```
 3. 仓库 Settings → Pages → Source 选 `main` 分支根目录 → Save。
-4. 等一两分钟，用**手机 Chrome** 打开 `https://<你的用户名>.github.io/phantom-beats-pwa/`。
-5. 点浏览器右上角 ⋮ → **「添加到主屏幕」**（或「安装应用」），即可像 App 一样全屏使用。
+4. 等一两分钟，手机 Chrome 打开 `https://<用户名>.github.io/phantom-beats-pwa/`，点 ⋮ → **「添加到主屏幕」**。
 
 ### 方式 B：本地 HTTPS 临时服务器（无需外部账号，今天就能用）
 > 自签证书会被 Chrome 报「不安全」——点「高级 → 继续访问」即可，这仍属于安全上下文，可正常安装。

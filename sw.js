@@ -29,16 +29,14 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;            // 非 GET（含 WebSocket）直接放行
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  // 网络优先：每次打开都拉最新代码；离线时回退缓存
   e.respondWith(
-    caches.match(req).then((cached) => {
-      const net = fetch(req).then((resp) => {
-        if (resp && resp.ok) {
-          const copy = resp.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy));
-        }
-        return resp;
-      }).catch(() => cached);
-      return cached || net;
-    })
+    fetch(req).then((resp) => {
+      if (resp && resp.ok) {
+        const copy = resp.clone();
+        caches.open(CACHE).then((c) => c.put(req, copy));
+      }
+      return resp;
+    }).catch(() => caches.match(req))
   );
 });
