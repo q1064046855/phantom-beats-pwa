@@ -1909,7 +1909,8 @@ document.getElementById('fsBtn').addEventListener('click', async () => {
     (/Macintosh|MacIntel/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1); // iPadOS 桌面 UA
   if (isIOS){
     if (navigator.standalone === true){
-      setStatus('✅ 当前已是从桌面图标启动的全屏模式，无需再点全屏');
+      // v3.46d 桌面图标启动已是全屏：直接进入沉浸态（隐藏全部按钮）
+      pinned = false; reflectPanel();
     } else {
       setStatus('📱 iPhone 全屏：① 点 Safari 底部「分享」图标 → ②「添加到主屏幕」→ ③ 先关掉本页，再【点桌面新图标启动】（在 Safari 里打开不会全屏）');
     }
@@ -1922,6 +1923,8 @@ document.getElementById('fsBtn').addEventListener('click', async () => {
         return;
       }
       await document.documentElement.requestFullscreen();
+      // v3.46d 进入全屏后直接沉浸：隐藏所有按钮，点屏幕召唤控制台
+      pinned = false; reflectPanel();
     } else {
       await document.exitFullscreen();
     }
@@ -1947,15 +1950,35 @@ let pinned = true;
 const pinBtn = document.getElementById('pinBtn');
 const hideBtn = document.getElementById('hideBtn');
 const showBtn = document.getElementById('showBtn');
+let _showBtnTimer = null;
+// v3.46d 召唤控制台按钮：显示并在 3 秒后自动隐藏（重复触发重新计时）
+function nudgeShowBtn(){
+  if (pinned) return;
+  showBtn.classList.add('show');
+  clearTimeout(_showBtnTimer);
+  _showBtnTimer = setTimeout(() => showBtn.classList.remove('show'), 3000);
+}
 function reflectPanel(){
   ui.classList.toggle('pinned', pinned);
   pinBtn.textContent = pinned ? '📌 固定面板' : '📍 浮动面板';
-  showBtn.classList.toggle('show', !pinned);
-  if (!pinned) setSettings(false);   // 工具栏收起时一并关闭设置
+  if (!pinned){
+    setSettings(false);   // 工具栏收起时一并关闭设置
+    nudgeShowBtn();
+  } else {
+    clearTimeout(_showBtnTimer);
+    showBtn.classList.remove('show');
+  }
 }
 pinBtn.addEventListener('click', () => { pinned = !pinned; reflectPanel(); });
 hideBtn.addEventListener('click', () => { pinned = false; reflectPanel(); });
-showBtn.addEventListener('click', () => { pinned = true; reflectPanel(); });
+showBtn.addEventListener('click', e => { e.stopPropagation(); pinned = true; reflectPanel(); });
+
+// v3.46d 收起/沉浸态下，点击屏幕任意处重新召唤控制台按钮（点按钮本身除外）
+document.addEventListener('click', e => {
+  if (pinned) return;
+  if (e.target === showBtn || showBtn.contains(e.target)) return;
+  nudgeShowBtn();
+});
 
 // ============================================================
 // v3.44: 左键拖拽歌词区域 → 所有歌词半透明悬浮 → 上下滑动选行 → 松手对齐
@@ -2079,6 +2102,8 @@ function drawDragSeek(ctx){
 
 canvas.addEventListener('pointerdown', e => {
   if (e.button !== 0 || dragSeek.active) return;
+  // v3.46d 收起/沉浸态：点按仅用于召唤控制台，不启动歌词拖拽
+  if (!pinned) return;
   if (!state.lyrics.lines.length || state.lyrics.hidden) return;
   beginDragSeek(e.clientY);
   try { canvas.setPointerCapture(e.pointerId); } catch(_){}
