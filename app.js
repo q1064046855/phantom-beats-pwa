@@ -903,7 +903,9 @@ let micStream = null;
 
 /* v3.46 云端识别：15 秒 PCM 环形录音（ScriptProcessor 全平台兼容，含 iOS） */
 let _micProc = null;
+let _micNode = null;      // v3.46b AudioWorkletNode
 let _micMute = null;
+let _micCbCount = 0;      // 音频回调次数（诊断用）
 let _micRingChunks = [];   // Int16Array 块
 let _micRingSamples = 0;
 let _micRingCap = 0;
@@ -1002,6 +1004,9 @@ async function startMicModeAsync(quiet){
     throw new Error('getUserMedia unavailable');
   }
   ensureAudioCtx();
+  if (audioCtx.state === 'suspended'){
+    try { await audioCtx.resume(); } catch(e){}
+  }
   const stream = await navigator.mediaDevices.getUserMedia(
     { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
   micStream = stream;
@@ -1010,27 +1015,48 @@ async function startMicModeAsync(quiet){
   // 环形录音：采样率随 AudioContext（手机常为48k，ACR 支持）
   _micRingSR = audioCtx.sampleRate || 44100;
   _micRingCap = Math.floor(_micRingSR * 15.5);
-  _micRingChunks = []; _micRingSamples = 0;
+  _micRingChunks = []; _micRingSamples = 0; _micCbCount = 0;
+  // 静音汇入节点：录音处理器必须汇入 destination 才会被音频图驱动，gain=0 保证无声
+  _micMute = audioCtx.createGain();
+  _micMute.gain.value = 0;
+  _micMute.connect(audioCtx.destination);
+
+  // 方案1（首选）AudioWorklet：音频线程内运行，现代手机浏览器全支持
+  let workletOk = false;
   try {
-    _micProc = audioCtx.createScriptProcessor(4096, 1, 1);
-    _micProc.onaudioprocess = ev => {
-      const input = ev.inputBuffer.getChannelData(0);
-      const i16 = new Int16Array(input.length);
-      for (let i = 0; i < input.length; i++){
-        let s = input[i];
-        if (s > 1) s = 1; else if (s < -1) s = -1;
-        i16[i] = s < 0 ? s * 32768 : s * 32767;
-      }
-      _pushMicChunk(i16);
-    };
-    sourceNode.connect(_micProc);
-    // v3.46 手机端：ScriptProcessor 必须汇入 destination 才会触发回调，
-    // 经 gain=0 静音节点，保证处理运行且完全无声（不啸叫）
-    _micMute = audioCtx.createGain();
-    _micMute.gain.value = 0;
-    _micProc.connect(_micMute);
-    _micMute.connect(audioCtx.destination);
-  } catch(e){ _micProc = null; }
+    if (audioCtx.audioWorklet && window.AudioWorkletNode){
+      await audioCtx.audioWorklet.addModule('mic-worklet.js?v=346b');
+      _micNode = new AudioWorkletNode(audioCtx, 'mic-recorder',
+        { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+      _micNode.port.onmessage = ev => {
+        _micCbCount++;
+        _pushMicChunk(new Int16Array(ev.data));
+      };
+      sourceNode.connect(_micNode);
+      _micNode.connect(_micMute);
+      workletOk = true;
+    }
+  } catch(e){ workletOk = false; try{ if (_micNode) _micNode.disconnect(); }catch(_){} _micNode = null; }
+
+  // 方案2（兜底）ScriptProcessor
+  if (!workletOk){
+    try {
+      _micProc = audioCtx.createScriptProcessor(4096, 1, 1);
+      _micProc.onaudioprocess = ev => {
+        _micCbCount++;
+        const input = ev.inputBuffer.getChannelData(0);
+        const i16 = new Int16Array(input.length);
+        for (let i = 0; i < input.length; i++){
+          let s = input[i];
+          if (s > 1) s = 1; else if (s < -1) s = -1;
+          i16[i] = s < 0 ? s * 32768 : s * 32767;
+        }
+        _pushMicChunk(i16);
+      };
+      sourceNode.connect(_micProc);
+      _micProc.connect(_micMute);
+    } catch(e){ _micProc = null; }
+  }
   return stream;
 }
 
@@ -1038,9 +1064,11 @@ function stopAudio(){
   try { if (fileBufferSrc) fileBufferSrc.stop(); } catch(e){}
   try { if (micStream) micStream.getTracks().forEach(t => t.stop()); } catch(e){}
   try { if (_micProc) _micProc.disconnect(); } catch(e){}
+  try { if (_micNode) _micNode.disconnect(); } catch(e){}
   try { if (_micMute) _micMute.disconnect(); } catch(e){}
   fileBufferSrc = null; micStream = null;
-  _micProc = null; _micMute = null; _micRingChunks = []; _micRingSamples = 0;
+  _micProc = null; _micNode = null; _micMute = null;
+  _micRingChunks = []; _micRingSamples = 0;
 }
 
 function pullFrame(){
@@ -1268,8 +1296,14 @@ async function cloudRecognize(isAuto){
     return { type: 'precheck' };
   }
   if (_micRingSamples < _micRingSR * 12){
-    if (!isAuto) setStatus('⏳ 已录 ' + (_micRingSamples / _micRingSR).toFixed(0) +
-      ' 秒，还需 12 秒，请让音乐继续播放后再点');
+    if (!isAuto){
+      const backend = _micNode ? 'worklet' : (_micProc ? 'script' : '无');
+      const diag = '[b ctx=' + (audioCtx ? audioCtx.state : '?') +
+        ' 回调=' + _micCbCount + ' 方式=' + backend +
+        ' SR=' + _micRingSR + ']';
+      setStatus('⏳ 已录 ' + (_micRingSamples / _micRingSR).toFixed(1) +
+        ' 秒/需12秒 ' + diag);
+    }
     return { type: 'precheck' };
   }
   if (!isAuto) setStatus('🔎 正在识别……（约 6 秒）');
