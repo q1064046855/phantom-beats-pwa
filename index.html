@@ -289,16 +289,17 @@
       box-shadow:0 8px 24px rgba(0,0,0,.45);
       pointer-events:auto;
     }
-    /* 贴最上方：歌词版本更换 + 搜索框 + 搜索（右侧给竖排留位，超长横滑） */
+    /* 贴最上方：搜索框 + 搜索 + 歌词版本更换（宽度按内容，排不下才横滑，无多余空白） */
     #topSearchRow{
       top:calc(10px + env(safe-area-inset-top,0px));
       left:calc(10px + env(safe-area-inset-left,0px));
-      right:calc(134px + env(safe-area-inset-right,0px));
+      right:auto;
+      max-width:calc(100vw - 20px - 134px);
       overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;
     }
     #topSearchRow::-webkit-scrollbar{display:none}
     #topSearchRow > *{flex-shrink:0}
-    #topSearchRow #subsSearch{flex:1 1 112px;min-width:84px}
+    #topSearchRow #subsSearch{flex:0 0 auto;width:112px;min-width:0}
     /* 右上角竖排：①缩小 ②全屏 ③识别歌曲 ④设置 */
     #sideBtnRow{
       top:calc(10px + env(safe-area-inset-top,0px));
@@ -340,10 +341,12 @@
       width:auto; height:min(62vh, 520px);
     }
 
-    /* 工具栏收起后的「控制面板」恢复按钮：右下角 */
+    /* 收起/沉浸态的「控制台」召唤按钮：右上角 */
     #showBtn{
-      top:auto; right:10px;
-      bottom:calc(20px + env(safe-area-inset-bottom,0px));
+      top:calc(10px + env(safe-area-inset-top,0px));
+      right:calc(10px + env(safe-area-inset-right,0px));
+      bottom:auto;
+      min-height:40px;padding:8px 14px;
     }
   }
 
@@ -377,13 +380,13 @@
 
 <!-- ============ 二级页面：顶部搜索行 + 右上角竖排按钮 ============ -->
 <div id="ui" class="pinned">
-  <!-- 贴最上方：歌词版本更换 + 搜索框 + 搜索按钮 -->
+  <!-- 贴最上方：搜索框 + 搜索 + 歌词版本更换 -->
   <div class="row subs-sync-row" id="topSearchRow">
-    <button class="btn" id="matchVersionBtn" style="display:none" title="歌词不对？点一下换版本；只有一个版本时按歌名重新搜索更多版本">🎯 歌词版本更换</button>
     <span class="search-wrap">
       <input type="text" id="subsSearch" placeholder="搜歌名/歌词" style="width:160px" title="点击查看最近20条识别记录">
     </span>
     <button class="btn" id="searchBtn">🔍 搜索</button>
+    <button class="btn" id="matchVersionBtn" style="display:none" title="歌词不对？点一下换版本；只有一个版本时按歌名重新搜索更多版本">🎯 歌词版本更换</button>
   </div>
   <!-- 右上角竖排：①缩小 ②全屏 ③识别歌曲 ④设置 -->
   <div class="row" id="sideBtnRow">
@@ -394,7 +397,7 @@
   </div>
 </div>
 
-<button id="showBtn" class="btn">⚙ 控制面板</button>
+<button id="showBtn" class="btn">⚙ 控制台</button>
 
 <!-- ============ 三级页面：设置面板（收拢其他全部控件） ============ -->
 <div id="settingsPanel">
