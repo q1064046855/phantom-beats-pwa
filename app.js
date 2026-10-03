@@ -903,6 +903,7 @@ let micStream = null;
 
 /* v3.46 云端识别：15 秒 PCM 环形录音（ScriptProcessor 全平台兼容，含 iOS） */
 let _micProc = null;
+let _micMute = null;
 let _micRingChunks = [];   // Int16Array 块
 let _micRingSamples = 0;
 let _micRingCap = 0;
@@ -1022,7 +1023,13 @@ async function startMicModeAsync(quiet){
       }
       _pushMicChunk(i16);
     };
-    sourceNode.connect(_micProc);   // 不接 destination，避免啸叫
+    sourceNode.connect(_micProc);
+    // v3.46 手机端：ScriptProcessor 必须汇入 destination 才会触发回调，
+    // 经 gain=0 静音节点，保证处理运行且完全无声（不啸叫）
+    _micMute = audioCtx.createGain();
+    _micMute.gain.value = 0;
+    _micProc.connect(_micMute);
+    _micMute.connect(audioCtx.destination);
   } catch(e){ _micProc = null; }
   return stream;
 }
@@ -1031,8 +1038,9 @@ function stopAudio(){
   try { if (fileBufferSrc) fileBufferSrc.stop(); } catch(e){}
   try { if (micStream) micStream.getTracks().forEach(t => t.stop()); } catch(e){}
   try { if (_micProc) _micProc.disconnect(); } catch(e){}
+  try { if (_micMute) _micMute.disconnect(); } catch(e){}
   fileBufferSrc = null; micStream = null;
-  _micProc = null; _micRingChunks = []; _micRingSamples = 0;
+  _micProc = null; _micMute = null; _micRingChunks = []; _micRingSamples = 0;
 }
 
 function pullFrame(){
@@ -1260,7 +1268,8 @@ async function cloudRecognize(isAuto){
     return { type: 'precheck' };
   }
   if (_micRingSamples < _micRingSR * 12){
-    if (!isAuto) setStatus('⏳ 录音时间不足，让音乐播放十几秒后再点识别');
+    if (!isAuto) setStatus('⏳ 已录 ' + (_micRingSamples / _micRingSR).toFixed(0) +
+      ' 秒，还需 12 秒，请让音乐继续播放后再点');
     return { type: 'precheck' };
   }
   if (!isAuto) setStatus('🔎 正在识别……（约 6 秒）');
