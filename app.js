@@ -332,6 +332,7 @@ function resize(){
   canvas.style.width  = W + 'px';
   canvas.style.height = H + 'px';
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  try { _sprites.clear(); } catch(_){}  // v3.46e（首次 resize 早于其定义）
   initStars();
 }
 window.addEventListener('resize', resize);
@@ -609,7 +610,9 @@ function getLyricSprite(text, bright){
      ⚠️ 与 drawLyricsFly 的 K_FAR=560 / K_SPAN=3200 / FONT_UNIT=0.040·H_SCALE
      / maxW=0.88W 耦合（11 = 0.88·GLYPH_PX·1080/(0.040·2160·1080)·(H/W)…化简
      得 11·GLYPH_PX·W/H−2·SPR_PAD），改那些参数必须重解这里。 */
-  const aspect = (W > 0 && H > 0) ? W / H : (16 / 9);
+  /* v3.46e 竖屏不拆行：宽高比下限按 16/9 计算——竖屏时常规句也保持单行横排，
+     与横屏表现一致；仅超长句（横屏也放不下时）才拆行 */
+  const aspect = Math.max(((W > 0 && H > 0) ? W / H : (16 / 9)), 16 / 9);
   const maxGlyphW = Math.max(400, 11 * GLYPH_PX * aspect - SPR_PAD * 2);
 
   // 贪心按像素宽断行：前 n-1 行每行 ≈ targetW，末行收尾
@@ -1066,6 +1069,8 @@ function stopAudio(){
   try { if (_micProc) _micProc.disconnect(); } catch(e){}
   try { if (_micNode) _micNode.disconnect(); } catch(e){}
   try { if (_micMute) _micMute.disconnect(); } catch(e){}
+  // v3.46e 断开 analyser→destination（本地文件播放时接的），防止之后切麦克风啸叫
+  try { if (analyser) analyser.disconnect(); } catch(e){}
   fileBufferSrc = null; micStream = null;
   _micProc = null; _micNode = null; _micMute = null;
   _micRingChunks = []; _micRingSamples = 0;
@@ -1426,10 +1431,10 @@ document.querySelectorAll('#sourceSeg .seg-btn').forEach(b => {
   };
 });
 
-// v3.46 云端模式：系统音频/本地文件依赖本机服务端，云端隐藏；默认麦克风
+// v3.46 云端模式：系统音频依赖本机服务端，云端隐藏；本地音乐(文件解码播放)云端可用
 if (CLOUD_MODE){
   document.querySelectorAll('#sourceSeg .seg-btn').forEach(x => {
-    if (x.dataset.source === 'system' || x.dataset.source === 'file'){
+    if (x.dataset.source === 'system'){
       x.style.display = 'none';
     }
     if (x.dataset.source === 'mic') x.classList.add('active');
@@ -1475,6 +1480,8 @@ const subsSearch = document.getElementById('subsSearch');
 const searchBtn = document.getElementById('searchBtn');
 const lyricsOnOffBtn = document.getElementById('lyricsOnOffBtn');
 
+const RECOG_NOTE_HTML = '<span class="recog-note">&#x266A;&#xFE0E;</span>';
+const RECOG_LABEL_HTML = RECOG_NOTE_HTML + ' 识别歌曲';
 /* 识别按钮填充两态（v3.38：等待期绿色填充已取消，仅识别中灰色）：
    idle    —— 正常「🎵 识别歌曲」
    waiting —— 歌放完后 grace(20s) 等待期：按钮外观不变，仅左上 chip 读秒
@@ -1505,20 +1512,20 @@ function updateRecogUI(){
       (Math.min(1, el / RECOG_EXPECT_SEC) * 100).toFixed(1) + '%';
     if (recogLabelEl){
       const left = Math.max(0, Math.ceil(RECOG_EXPECT_SEC - el));
-      recogLabelEl.textContent = el >= RECOG_EXPECT_SEC
-        ? '🎵 识别中…' : '🎵 识别中 ' + left + 's';
+      recogLabelEl.innerHTML = el >= RECOG_EXPECT_SEC
+        ? RECOG_NOTE_HTML + ' 识别中…' : RECOG_NOTE_HTML + ' 识别中 ' + left + 's';
     }
     if (autoLockChip) autoLockChip.classList.remove('show');
   } else if (mode === 'waiting'){
     // v3.38：等待期按钮不再填充绿色，只保留左上角读秒胶囊
     if (recogFillEl) recogFillEl.style.width = '0%';
-    if (recogLabelEl) recogLabelEl.textContent = '🎵 识别歌曲';
+    if (recogLabelEl) recogLabelEl.innerHTML = RECOG_LABEL_HTML;
     if (autoLockChipText)
       autoLockChipText.textContent = '自动识别 ' + Math.ceil(remain) + 's';
     if (autoLockChip) autoLockChip.classList.add('show');
   } else {
     if (recogFillEl) recogFillEl.style.width = '0%';
-    if (recogLabelEl) recogLabelEl.textContent = '🎵 识别歌曲';
+    if (recogLabelEl) recogLabelEl.innerHTML = RECOG_LABEL_HTML;
     if (autoLockChip) autoLockChip.classList.remove('show');
   }
 }
@@ -1947,7 +1954,6 @@ if (settingsBtn) settingsBtn.addEventListener('click', () =>
 if (settingsClose) settingsClose.addEventListener('click', () => setSettings(false));
 
 let pinned = true;
-const pinBtn = document.getElementById('pinBtn');
 const hideBtn = document.getElementById('hideBtn');
 const showBtn = document.getElementById('showBtn');
 let _showBtnTimer = null;
@@ -1960,7 +1966,6 @@ function nudgeShowBtn(){
 }
 function reflectPanel(){
   ui.classList.toggle('pinned', pinned);
-  pinBtn.textContent = pinned ? '📌 固定面板' : '📍 浮动面板';
   if (!pinned){
     setSettings(false);   // 工具栏收起时一并关闭设置
     nudgeShowBtn();
@@ -1969,7 +1974,6 @@ function reflectPanel(){
     showBtn.classList.remove('show');
   }
 }
-pinBtn.addEventListener('click', () => { pinned = !pinned; reflectPanel(); });
 hideBtn.addEventListener('click', () => { pinned = false; reflectPanel(); });
 showBtn.addEventListener('click', e => { e.stopPropagation(); pinned = true; reflectPanel(); });
 
