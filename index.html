@@ -132,6 +132,8 @@
     color:rgba(255,255,255,.85);cursor:wait;
   }
   #recogBtn .recog-label{position:relative;z-index:1;white-space:nowrap}
+  /* v3.46e 紫色音符（强制文本字形，CSS 着色，与电脑端一致） */
+  .recog-note{color:#b07bff;font-weight:900;font-size:1.15em;letter-spacing:0}
 
   /* 歌词同步控件 */
   .subs-sync-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -334,6 +336,13 @@
       bottom:calc(10px + env(safe-area-inset-bottom,0px));
       width:auto; max-height:none;
     }
+    /* v3.46e 横屏：设置只占右侧 1/3，调律动线条时左侧 2/3 可见实时状态 */
+    @media (orientation:landscape){
+      #settingsPanel{
+        left:auto;
+        width:calc((100vw - 30px)/3);
+      }
+    }
 
     /* 歌词全列表面板：全宽、上半屏 */
     #lyricsAllPanel{
@@ -392,7 +401,7 @@
   <div class="row" id="sideBtnRow">
     <button class="btn" id="hideBtn" title="收起工具栏">— 缩小</button>
     <button class="btn" id="fsBtn" title="全屏 / 退出全屏">⛶ 全屏</button>
-    <button class="btn" id="recogBtn" title="录15秒识别当前歌曲并自动加载歌词"><span class="recog-fill"></span><span class="recog-label">🎵 识别歌曲</span></button>
+    <button class="btn" id="recogBtn" title="录15秒识别当前歌曲并自动加载歌词"><span class="recog-fill"></span><span class="recog-label"><span class="recog-note">&#x266A;&#xFE0E;</span> 识别歌曲</span></button>
     <button class="btn" id="settingsBtn" title="打开设置：音源/配色/歌词开关/自动跟随等">⚙ 设置</button>
   </div>
 </div>
@@ -410,7 +419,7 @@
     <span class="lab">音源 SOURCE</span>
     <div class="seg" id="sourceSeg">
       <button class="seg-btn active" data-source="system">系统音频</button>
-      <button class="seg-btn" data-source="file">本地文件</button>
+      <button class="seg-btn" data-source="file">本地音乐</button>
       <button class="seg-btn" data-source="mic">麦克风</button>
       <button class="seg-btn" data-source="demo">演示</button>
     </div>
@@ -430,7 +439,6 @@
   <div class="row">
     <span class="lab">歌词显示</span>
     <button class="btn active" id="lyricsOnOffBtn" title="关闭后歌词不再显示（历史记录保留）">🎤 歌词 开</button>
-    <button class="btn" id="lyricsListBtn" title="打开全部歌词列表，点任意一行对齐">📜 歌词手动对齐</button>
   </div>
 
   <div class="row">
@@ -466,11 +474,6 @@
     <span class="lab">线宽</span>
     <input type="range" id="lw" min="0.5" max="4" step="0.1" value="1.6">
     <span class="v" id="lwV">1.60</span>
-  </div>
-
-  <div class="row">
-    <span class="lab">面板</span>
-    <button class="btn" id="pinBtn">📌 固定面板</button>
   </div>
 </div>
 
