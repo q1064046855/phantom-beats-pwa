@@ -26,6 +26,7 @@
     -webkit-backdrop-filter:blur(14px) saturate(160%);
     padding:12px 14px;
     width:auto;
+    display:flex;align-items:center;gap:12px;
     /* 左侧给左上角歌名预留 ~260px，按钮排不下时换行，绝不遮挡歌名 */
     max-width:calc(100vw - 40px - 260px);
     max-height:calc(100vh - 40px);
@@ -37,7 +38,7 @@
   #ui:not(.pinned){opacity:0;transform:translateY(20px);pointer-events:none}
   #ui.pinned{opacity:1}
   #ui .row{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:6px 0}
-  #ui .row + .row{border-top:1px dashed rgba(255,255,255,.08)}
+  #ui .row + .row{border-top:0}
   #ui .lab{font-size:11px;color:rgba(255,255,255,.55);letter-spacing:.1em;min-width:72px}
 
   .shape-badge{
@@ -269,19 +270,41 @@
   .btn, .seg-btn, select, .shape-badge{ touch-action: manipulation; }
 
   @media (max-width: 820px){
-    /* 主工具栏：右上角 → 底部全宽，内部一行横向滚动（手机原生滚动条隐藏） */
+    /* v3.46c 容器透明化：两组控件分别 fixed（顶部搜索行 / 右上角竖排按钮） */
     #ui{
-      top:auto; left:10px; right:10px;
-      bottom:calc(10px + env(safe-area-inset-bottom, 0px));
-      max-width:none; max-height:none; padding:8px 10px;
+      top:0;left:0;right:0;bottom:auto;
+      max-width:none;max-height:none;padding:0;
+      background:transparent;border:0;box-shadow:none;border-radius:0;
+      backdrop-filter:none;-webkit-backdrop-filter:none;
+      pointer-events:none;
     }
+    #ui.pinned{pointer-events:none}
     #ui .row{
-      flex-wrap:nowrap; overflow-x:auto; gap:8px;
-      -webkit-overflow-scrolling:touch;
-      scrollbar-width:none;             /* Firefox 隐藏滚动条 */
+      position:fixed;flex-wrap:nowrap;gap:8px;padding:8px;
+      background:rgba(8,8,14,.78);border:1px solid rgba(255,255,255,.10);
+      border-radius:12px;
+      backdrop-filter:blur(14px) saturate(160%);
+      -webkit-backdrop-filter:blur(14px) saturate(160%);
+      box-shadow:0 8px 24px rgba(0,0,0,.45);
+      pointer-events:auto;
     }
-    #ui .row::-webkit-scrollbar{ display:none; }
-    #ui .row > *{ flex-shrink:0; }
+    /* 贴最上方：歌词版本更换 + 搜索框 + 搜索（右侧给竖排留位，超长横滑） */
+    #topSearchRow{
+      top:calc(10px + env(safe-area-inset-top,0px));
+      left:calc(10px + env(safe-area-inset-left,0px));
+      right:calc(134px + env(safe-area-inset-right,0px));
+      overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;
+    }
+    #topSearchRow::-webkit-scrollbar{display:none}
+    #topSearchRow > *{flex-shrink:0}
+    #topSearchRow #subsSearch{flex:1 1 112px;min-width:84px}
+    /* 右上角竖排：①缩小 ②全屏 ③识别歌曲 ④设置 */
+    #sideBtnRow{
+      top:calc(10px + env(safe-area-inset-top,0px));
+      right:calc(10px + env(safe-area-inset-right,0px));
+      flex-direction:column;align-items:stretch;
+    }
+    #sideBtnRow .btn{width:100%;min-height:40px;padding:8px 12px;text-align:center}
 
     /* 手指触控目标 ≥38px */
     .btn{ min-height:38px; padding:7px 13px; }
@@ -294,16 +317,16 @@
        这里只放开宽度限制 */
     #historyPanel{ max-width:none; }
 
-    /* 顶部：歌名胶囊 / 自动识别倒计时 / 状态条 */
+    /* 顶部被搜索行+竖排按钮占用，歌名胶囊/倒计时/状态条整体下移 */
     #nowPlaying{
-      top:10px; left:10px; max-width:calc(100vw - 20px - 70px);
+      top:68px; left:10px; max-width:calc(100vw - 20px - 70px);
       font-size:13px; padding:6px 12px;
     }
-    #autoLockChip{ top:44px; left:10px; font-size:12px; }
-    #status{ top:82px; font-size:11px; }
+    #autoLockChip{ top:102px; left:10px; font-size:12px; }
+    #status{ top:138px; left:10px; font-size:11px; }
     #hint{ font-size:12px; top:10%; padding:8px 14px; }
 
-    /* 设置面板：近全屏（盖住底部工具栏） */
+    /* 设置面板：近全屏（盖住控件） */
     #settingsPanel{
       top:10px; left:10px; right:10px;
       bottom:calc(10px + env(safe-area-inset-bottom,0px));
@@ -316,10 +339,10 @@
       width:auto; height:min(62vh, 520px);
     }
 
-    /* 工具栏收起后的「控制面板」恢复按钮：右下、底部条上方 */
+    /* 工具栏收起后的「控制面板」恢复按钮：右下角 */
     #showBtn{
       top:auto; right:10px;
-      bottom:calc(72px + env(safe-area-inset-bottom,0px));
+      bottom:calc(20px + env(safe-area-inset-bottom,0px));
     }
   }
 
@@ -351,18 +374,22 @@
 <!-- v3.41: 历史面板挂在 body 下（fixed），避免被工具栏滚动容器裁剪 -->
 <div id="historyPanel"></div>
 
-<!-- ============ 二级页面：右上角主工具栏（精简） ============ -->
+<!-- ============ 二级页面：顶部搜索行 + 右上角竖排按钮 ============ -->
 <div id="ui" class="pinned">
-  <div class="row subs-sync-row" style="border:0;padding:0">
-    <button class="btn" id="recogBtn" title="录15秒识别当前歌曲并自动加载歌词"><span class="recog-fill"></span><span class="recog-label">🎵 识别歌曲</span></button>
+  <!-- 贴最上方：歌词版本更换 + 搜索框 + 搜索按钮 -->
+  <div class="row subs-sync-row" id="topSearchRow">
     <button class="btn" id="matchVersionBtn" style="display:none" title="歌词不对？点一下换版本；只有一个版本时按歌名重新搜索更多版本">🎯 歌词版本更换</button>
     <span class="search-wrap">
       <input type="text" id="subsSearch" placeholder="搜歌名/歌词" style="width:160px" title="点击查看最近20条识别记录">
     </span>
     <button class="btn" id="searchBtn">🔍 搜索</button>
-    <button class="btn" id="settingsBtn" title="打开设置：音源/配色/歌词开关/自动跟随等">⚙ 设置</button>
-    <button class="btn" id="fsBtn" title="全屏 / 退出全屏">⛶ 全屏</button>
+  </div>
+  <!-- 右上角竖排：①缩小 ②全屏 ③识别歌曲 ④设置 -->
+  <div class="row" id="sideBtnRow">
     <button class="btn" id="hideBtn" title="收起工具栏">— 缩小</button>
+    <button class="btn" id="fsBtn" title="全屏 / 退出全屏">⛶ 全屏</button>
+    <button class="btn" id="recogBtn" title="录15秒识别当前歌曲并自动加载歌词"><span class="recog-fill"></span><span class="recog-label">🎵 识别歌曲</span></button>
+    <button class="btn" id="settingsBtn" title="打开设置：音源/配色/歌词开关/自动跟随等">⚙ 设置</button>
   </div>
 </div>
 
