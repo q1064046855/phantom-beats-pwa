@@ -69,6 +69,7 @@ const state = {
   glow: 1.4,
   lw: 1.6,
   source: 'system',
+  vocalEnhance: true,     // v3.46f 识别前人声提纯（削低音鼓点+提人声频段）
   sysFrame: null,
   wsConnected: false,
   spec: new Float32Array(FFT_BINS),
@@ -923,6 +924,59 @@ function _pushMicChunk(i16){
   }
 }
 
+// ============================================================
+// v3.46f 人声提纯（提交识别前处理，针对 DJ 重低音场景）
+// 单声道麦克风无法做"中置声道提取"，改用：
+// ① 高通 150Hz 削鼓点/Bass ② 高频搁架 3kHz +4dB 提人声咬字 ③ 峰值归一化
+// ============================================================
+function _biquadCoeffs(type, sr, f0, gainDB){
+  const A = Math.pow(10, gainDB / 40);
+  const w0 = 2 * Math.PI * f0 / sr;
+  const cosw = Math.cos(w0), sinw = Math.sin(w0);
+  let b0,b1,b2,a0,a1,a2;
+  if (type === 'highpass'){
+    const alpha = sinw / (2 * 0.707);
+    b0 =  (1 + cosw) / 2; b1 = -(1 + cosw); b2 = (1 + cosw) / 2;
+    a0 = 1 + alpha; a1 = -2 * cosw; a2 = 1 - alpha;
+  } else { // highshelf
+    const alpha = sinw / 2 * Math.sqrt((A + 1/A) * (1/0.707 - 1) + 2);
+    const sa = 2 * Math.sqrt(A) * alpha;
+    b0 =    A * ((A + 1) + (A - 1) * cosw + sa);
+    b1 = -2*A * ((A - 1) + (A + 1) * cosw);
+    b2 =    A * ((A + 1) + (A - 1) * cosw - sa);
+    a0 =       ((A + 1) - (A - 1) * cosw + sa);
+    a1 =    2 * ((A - 1) - (A + 1) * cosw);
+    a2 =       ((A + 1) - (A - 1) * cosw - sa);
+  }
+  return [b0/a0, b1/a0, b2/a0, a1/a0, a2/a0];
+}
+function _applyBiquad(x, c){
+  const [b0,b1,b2,a1,a2] = c;
+  let x1=0,x2=0,y1=0,y2=0;
+  for (let i=0;i<x.length;i++){
+    const xn = x[i];
+    const yn = b0*xn + b1*x1 + b2*x2 - a1*y1 - a2*y2;
+    x2=x1; x1=xn; y2=y1; y1=yn; x[i]=yn;
+  }
+}
+function enhanceVocal(i16, sr){
+  const f = new Float32Array(i16.length);
+  for (let i=0;i<i16.length;i++) f[i] = i16[i] / 32768;
+  _applyBiquad(f, _biquadCoeffs('highpass', sr, 150, 0));
+  _applyBiquad(f, _biquadCoeffs('highshelf', sr, 3000, 4));
+  // 峰值归一化到 -1dB；信号过小(≤0.02)不放大噪声
+  let peak = 0;
+  for (let i=0;i<f.length;i++){ const a = Math.abs(f[i]); if (a>peak) peak=a; }
+  const g = peak > 0.02 ? Math.min(6, 0.891 / peak) : 1;
+  const out = new Int16Array(i16.length);
+  for (let i=0;i<f.length;i++){
+    let s = f[i] * g;
+    if (s > 1) s = 1; else if (s < -1) s = -1;
+    out[i] = s < 0 ? s*32768 : s*32767;
+  }
+  return out;
+}
+
 function captureRingWav(seconds){
   const need = Math.min(_micRingSamples, Math.floor(seconds * _micRingSR));
   const out = new Int16Array(need);
@@ -934,7 +988,9 @@ function captureRingWav(seconds){
     off -= take;
     if (off <= 0) break;
   }
-  return encodeWavI16(out, _micRingSR);
+  const finalSamples = (CLOUD_MODE && state.vocalEnhance)
+    ? enhanceVocal(out, _micRingSR) : out;
+  return encodeWavI16(finalSamples, _micRingSR);
 }
 
 function encodeWavI16(samples, sr){
@@ -1952,6 +2008,15 @@ function setSettings(open){
 if (settingsBtn) settingsBtn.addEventListener('click', () =>
   setSettings(!settingsPanel.classList.contains('show')));
 if (settingsClose) settingsClose.addEventListener('click', () => setSettings(false));
+
+// v3.46f 人声提纯开关
+const vocalEnhanceBtn = document.getElementById('vocalEnhanceBtn');
+if (vocalEnhanceBtn) vocalEnhanceBtn.addEventListener('click', () => {
+  state.vocalEnhance = !state.vocalEnhance;
+  vocalEnhanceBtn.classList.toggle('active', state.vocalEnhance);
+  vocalEnhanceBtn.textContent = state.vocalEnhance ? '🎚 人声提纯 开' : '🎚 人声提纯 关';
+  setStatus(state.vocalEnhance ? '🎚 人声提纯已开启' : '🎚 人声提纯已关闭（提交原始录音）');
+});
 
 let pinned = true;
 const hideBtn = document.getElementById('hideBtn');
