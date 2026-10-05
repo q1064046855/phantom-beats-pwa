@@ -10,7 +10,7 @@
    ============================================================ */
 
 const FFT_BINS = 64;
-const VERSION = 'v3.90';
+const VERSION = 'v3.91';
 
 /* v3.83 PWA：注册 Service Worker（添加到主屏幕 = 手机 App 体验）。
  * 仅 HTTPS / localhost 下浏览器允许注册；局域网 http://IP 访问自动跳过，功能不受影响。 */
@@ -4042,7 +4042,7 @@ if (CLOUD_MODE){
   connectWS();
 }
 
-// 全屏 / 固定面板
+// 全屏 / 沉浸态
 document.getElementById('fsBtn').addEventListener('click', async () => {
   /* v3.42: iPhone/iPad Safari【完全不支持】DOM Fullscreen API（只有 video 元素例外），
      点按钮永远无法全屏。iOS 唯一全屏路径 = 添加到主屏幕 + 从桌面图标启动
@@ -4058,20 +4058,34 @@ document.getElementById('fsBtn').addEventListener('click', async () => {
     }
     return;
   }
-  try{
-    if (!document.fullscreenElement){
-      if (!document.documentElement.requestFullscreen){
-        setStatus('⚠️ 当前浏览器不支持全屏');
-        return;
-      }
-      await document.documentElement.requestFullscreen();
-      // v3.46d 进入全屏后直接沉浸：隐藏所有按钮，点屏幕召唤控制台
-      pinned = false; reflectPanel();
-    } else {
-      await document.exitFullscreen();
+  /* v3.91：沉浸态立即进入，OS 级全屏尽力而为。
+     背景：部分环境（Electron 内嵌渲染器、权限策略受限的 WebView）调用
+     requestFullscreen() 后 Promise 长期挂起或静默失败——旧代码死等会导致
+     点了按钮毫无反应。现在先收起 UI（3 秒后自动隐藏/点击呼出），
+     再给 OS 全屏 600ms；超时或拒绝都只提示、不影响沉浸使用。 */
+  if (document.fullscreenElement){
+    try{ await document.exitFullscreen(); }catch(e){}
+    return;
+  }
+  pinned = false;
+  reflectPanel();
+  if (document.documentElement.requestFullscreen){
+    let done = false;
+    const pr = document.documentElement.requestFullscreen();
+    if (pr && pr.then){
+      pr.then(()=>{ done = true; },
+             e => { if (!done) setStatus('ℹ️ 已进入沉浸模式（系统全屏未生效：' +
+                                         (e && e.name ? e.name : e) + '）'); });
+      setTimeout(() => { if (!done && !document.fullscreenElement) done = true; }, 600);
     }
-  }catch(e){
-    setStatus('⚠️ 全屏失败: ' + (e && e.name ? e.name : e));
+  }
+});
+/* v3.91 退出 DOM 全屏（Esc / 系统手势）→ 同步退出沉浸态，控制台与音符按钮恢复常驻。
+   进入全屏时此事件也触发，但此时 fullscreenElement 非空，条件不满足。 */
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && !pinned){
+    pinned = true;
+    reflectPanel();
   }
 });
 
@@ -4099,27 +4113,33 @@ if (vocalEnhanceBtn) vocalEnhanceBtn.addEventListener('click', () => {
 });
 
 let pinned = true;
-const hideBtn = document.getElementById('hideBtn');
 const showBtn = document.getElementById('showBtn');
 let _showBtnTimer = null;
-// v3.46d 召唤控制台按钮：显示并在 3 秒后自动隐藏（重复触发重新计时）
-function nudgeShowBtn(){
+/* v3.91 全屏沉浸态：呼出「控制台按钮 + 左下角音符按钮」，3 秒无操作自动隐藏
+   （重复触发重新计时）。播放器面板打开期间不隐藏音符按钮——用户正在操作；
+   面板关闭时其关闭按钮的点击会冒泡到 document 再次 nudge。 */
+function nudgeImmersive(){
   if (pinned) return;
   showBtn.classList.add('show');
+  playerBtnEl.classList.remove('auto-hide');
   clearTimeout(_showBtnTimer);
-  _showBtnTimer = setTimeout(() => showBtn.classList.remove('show'), 3000);
+  _showBtnTimer = setTimeout(() => {
+    showBtn.classList.remove('show');
+    if (!playerPanelEl.classList.contains('show')) playerBtnEl.classList.add('auto-hide');
+  }, 3000);
 }
 function reflectPanel(){
   ui.classList.toggle('pinned', pinned);
   if (!pinned){
     setSettings(false);   // 工具栏收起时一并关闭设置
-    nudgeShowBtn();
+    nudgeImmersive();
   } else {
     clearTimeout(_showBtnTimer);
     showBtn.classList.remove('show');
+    playerBtnEl.classList.remove('auto-hide');
   }
 }
-hideBtn.addEventListener('click', () => { pinned = false; reflectPanel(); });
+/* v3.91 「— 缩小」按钮已删除：收起入口统一为「⛶ 全屏」（功能合并） */
 showBtn.addEventListener('click', e => { e.stopPropagation(); pinned = true; reflectPanel(); });
 
 /* ============================================================
@@ -4145,11 +4165,11 @@ if (rotBtn){
   });
 }
 
-// v3.46d 收起/沉浸态下，点击屏幕任意处重新召唤控制台按钮（点按钮本身除外）
+// v3.91 全屏沉浸态下，点击屏幕任意处重新呼出「控制台按钮 + 音符按钮」（点按钮本身除外）
 document.addEventListener('click', e => {
   if (pinned) return;
   if (e.target === showBtn || showBtn.contains(e.target)) return;
-  nudgeShowBtn();
+  nudgeImmersive();
 });
 
 // ============================================================

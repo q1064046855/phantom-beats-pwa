@@ -337,7 +337,7 @@
     backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
     box-shadow:0 4px 18px rgba(60,30,120,.25),0 0 0 1px rgba(255,255,255,.06) inset;
     transform:scale(1);
-    transition:transform .12s ease-out,background .3s ease,box-shadow .3s ease;
+    transition:transform .12s ease-out,background .3s ease,box-shadow .3s ease,opacity .25s ease;
   }
   #playerBtn .pb-note{font-size:31px;display:block;transform:none;filter:none}
   #playerBtn:hover{background:rgba(139,92,246,.55)}
@@ -367,6 +367,13 @@
   #playerBtn.playing .pb-note{
     animation:pbSpin 4.5s linear infinite;
     filter:drop-shadow(0 0 8px rgba(255,255,255,.75)) drop-shadow(0 0 14px rgba(236,72,153,.6));
+  }
+  /* v3.91 全屏沉浸态：左下角音符按钮 3 秒自动隐藏（点屏幕任意处呼出）。
+     规则在 .playing 之后，同特异性时覆盖其 transform。 */
+  #playerBtn.auto-hide{
+    opacity:0;
+    transform:translateY(18px) scale(.92);
+    pointer-events:none;
   }
   @keyframes pbSpin{to{transform:rotate(360deg)}}
   @keyframes pbHue{to{filter:hue-rotate(360deg)}}
@@ -457,12 +464,15 @@
     #topSearchRow::-webkit-scrollbar{display:none}
     #topSearchRow > *{flex-shrink:0}
     #topSearchRow #subsSearch{flex:0 0 auto;width:112px;min-width:0}
-    /* 右上角竖排：①缩小 ②全屏 ③识别歌曲 ④设置 */
+    /* 右上角竖排：①全屏 ②识别歌曲 ③设置 */
     #sideBtnRow{
       top:calc(10px + env(safe-area-inset-top,0px));
       right:calc(10px + env(safe-area-inset-right,0px));
       flex-direction:column;align-items:stretch;
     }
+    /* v3.91 修复「按钮隐藏后仍点得到」：收起态两行必须彻底不可点
+       （#ui .row 上面刚设了 pointer-events:auto，这里在未 pinned 时关掉） */
+    #ui:not(.pinned) .row{pointer-events:none}
     #sideBtnRow .btn{width:100%;min-height:40px;padding:8px 12px;text-align:center}
 
     /* 手指触控目标 ≥38px */
@@ -711,9 +721,9 @@
     <button class="btn" id="matchVersionBtn" style="display:none" title="歌词不对？点一下换版本；只有一个版本时按歌名重新搜索更多版本">🎯 歌词版本更换</button>
     <button class="btn" id="lockLyricsBtn" style="display:none" title="把当前歌词锁定到这个播放位置；下次播到此处自动加载，且不再自动识别（可在设置里拖动调整起止时间）">&#x1F512; 锁定歌词</button>
   </div>
-  <!-- 右上角竖排：①缩小 ②横竖屏 ③全屏 ④识别歌曲 ⑤设置 -->
+  <!-- 右上角竖排：①横竖屏 ②全屏（全屏后3秒自动隐藏，点击屏幕呼出） ③识别歌曲 ④设置。
+       v3.91 起删除「— 缩小」按钮：功能并入全屏（进入沉浸态） -->
   <div class="row" id="sideBtnRow">
-    <button class="btn" id="hideBtn" title="收起工具栏">— 缩小</button>
     <!-- v3.90 强制横屏切换（系统未开旋转锁定也能横屏） -->
     <button class="btn" id="rotBtn" title="强制横屏（手机未开自动旋转也能横过来用）/ 恢复竖屏">🔄 横屏</button>
     <button class="btn" id="fsBtn" title="全屏 / 退出全屏">⛶ 全屏</button>
