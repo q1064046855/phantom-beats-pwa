@@ -10,7 +10,7 @@
    ============================================================ */
 
 const FFT_BINS = 64;
-const VERSION = 'v3.88';
+const VERSION = 'v3.89';
 
 /* v3.83 PWA：注册 Service Worker（添加到主屏幕 = 手机 App 体验）。
  * 仅 HTTPS / localhost 下浏览器允许注册；局域网 http://IP 访问自动跳过，功能不受影响。 */
@@ -1353,10 +1353,22 @@ function _plEnsureGraph(){
   ensureAudioCtx();
   if (!_plNode){
     _plNode = audioCtx.createMediaElementSource(playerAudio);
-    _plNode.connect(analyser);
   }
-  // stopAudio()/切麦克风可能断过 analyser→destination，这里幂等重连
+  /* v3.89 幂等重连：_plMuteChain 断过的链路在这里全部接回
+     （每次先断再接，MediaElementSource 支持重复 connect/disconnect） */
+  try{ _plNode.disconnect(); }catch(e){}
+  _plNode.connect(analyser);
+  try{ analyser.disconnect(); }catch(e){}
   analyser.connect(audioCtx.destination);
+}
+/* v3.89 iOS 修复：暂停时彻底断开播放器→扬声器链路。
+   iOS WebKit 缺陷：audio 元素经 createMediaElementSource 接入 WebAudio 后，
+   pause() 偶发不真正停渲染，MediaElementSourceNode 持续重复输出暂停瞬间的
+   最后一段缓冲区（几毫秒声音无限循环，播放/暂停均无法解除，只能关页面）。
+   断链后即使内部仍在循环也到不了扬声器；恢复播放时 _plEnsureGraph 幂等接回。 */
+function _plMuteChain(){
+  try{ if (_plNode) _plNode.disconnect(); }catch(e){}
+  try{ if (analyser) analyser.disconnect(); }catch(e){}
 }
 
 function _plFmt(t){
@@ -1771,6 +1783,7 @@ const PP_SVG_PAUSE = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidde
 function _plPause(){
   _plManualPause = true;
   playerAudio.pause();
+  _plMuteChain();   // v3.89 iOS 暂停循环残留：断开扬声器链路（恢复播放时幂等重连）
   /* v3.88：暂停后音源保持「播放器」（按钮亮播放器、波形静止）；
      不再自动回系统音频——要听系统声音由用户显式点「系统音频」 */
   document.getElementById('ppPlay').innerHTML = PP_SVG_PLAY;
@@ -1785,8 +1798,8 @@ playerAudio.addEventListener('play', () => {
   // 若麦克风仍在工作：停掉麦克风（否则会和播放器声音叠加进 analyser）
   if (micStream || _micNode || _micProc){
     stopAudio();
-    analyser.connect(audioCtx.destination);
   }
+  _plEnsureGraph();   // v3.89 幂等重连（暂停时被 _plMuteChain 断开过）
   state.source = 'player';
   _setSourceUI('player');   // v3.88 音源高亮跟随播放器
   document.getElementById('ppPlay').innerHTML = PP_SVG_PAUSE;
