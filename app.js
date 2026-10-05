@@ -10,7 +10,7 @@
    ============================================================ */
 
 const FFT_BINS = 64;
-const VERSION = 'v3.85';
+const VERSION = 'v3.86';
 
 /* v3.83 PWA：注册 Service Worker（添加到主屏幕 = 手机 App 体验）。
  * 仅 HTTPS / localhost 下浏览器允许注册；局域网 http://IP 访问自动跳过，功能不受影响。 */
@@ -2039,6 +2039,7 @@ setInterval(() => {
   // 选择框签名增量同步（暂停时也要反映锁定/手动状态变化）
   if (_vselSigLast !== _vselectSig()) renderVersionSelect();
   if (state.source !== 'player' || _plIdx < 0 || playerAudio.paused) return;
+  _cloudLockPollTick(_plKey(_plItems[_plIdx]));   // v3.86：播放中检测其他设备的锁定/歌词更新
   const p = playerAudio.currentTime;
   const data = _plLocks[_plKey(_plItems[_plIdx])];
   const seg = data && data.segments.find(s => p >= s.start && p <= s.end);
@@ -2124,15 +2125,19 @@ function _plCurLocks(){
   return _plLocks[_plKey(_plItems[_plIdx])] || null;
 }
 
-/* ============ v3.84 锁定歌词云端同步（v3.85 扩展为「歌词资料」同步） ============
- * 云端 locks/<fileKey>.json = { segments:[锁定篇], cur:{lrc,title,artist,source} 当前歌词 }
- * 本地保存锁定/识别出新词 → 防抖直传 COS（SCF 签发预签名 PUT）；
- * 播放时本机缺资料 → 从 COS 公有读直拉补齐（只补缺、不覆盖本地已有），
- * cur 歌词到货即自动应用（正确对齐当前播放位置）。
+/* ============ v3.84 锁定歌词云端同步（v3.86 升级为实时双向同步） ============
+ * 云端 locks/<fileKey>.json = { segments:[锁定篇], cur:{lrc,title,artist,source,ts},
+ *   updatedAt:最后保存时间 }
+ * 本机保存锁定/识别出新词 → 防抖直传 COS（SCF 签发预签名 PUT）；
+ * 播放启动时拉取补缺；v3.86：播放中每 25s 轮询云端，发现 updatedAt/cur.ts 比本地新
+ * → 热更新到正在播放的设备（锁定段监测下个周期自动接播，歌词立即应用），
+ * last-write-wins：任何设备（含手机识别后锁定）保存的最新版本全设备同步。
  * fileKey 与本地曲库键一致（歌名|字节）→ 电脑/手机同名同大小文件共享同一份资料。 */
-function _plLocksSave(){
+function _plLocksSave(fk){
+  const k = fk || (_plIdx >= 0 && _plItems[_plIdx] ? _plKey(_plItems[_plIdx]) : null);
+  if (k && _plLocks[k]) _plLocks[k].updatedAt = Date.now();   // v3.86 时间戳（云同步判新旧）
   idbPut('meta', 'locks', _plLocks).catch(() => {});
-  if (_plIdx >= 0 && _plItems[_plIdx]) _cloudLockUpload(_plKey(_plItems[_plIdx]));
+  if (k) _cloudLockUpload(k);
 }
 const _cloudLockT = {};
 function _cloudLockUpload(k){
@@ -2149,7 +2154,8 @@ function _cloudLockUpload(k){
       if (!r || !r.ok || !r.url) return;
       await fetch(r.url, { method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ segments: segs, cur }) });
+        body: JSON.stringify({ segments: segs, cur,
+          updatedAt: (_plLocks[k] && _plLocks[k].updatedAt) || Date.now() }) });
     }catch(e){ /* 云同步失败静默：本地已存，不影响使用 */ }
   }, 1500);
 }
@@ -2161,23 +2167,71 @@ function _cloudLockPull(k){
       const j = await fetch(cfg.base + '/locks/' + _cloudEnc(k) + '.json',
         { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
       if (!j) return;
-      let touched = false, curAdded = false;
-      if (j.segments && j.segments.length){
+      let touched = false, curAdded = false, segReplaced = false;
+      // v3.86 last-write-wins：updatedAt 新者胜（手机锁定 → 电脑/其他手机自动跟上）
+      const cloudU = j.updatedAt || 0, localU = (_plLocks[k] && _plLocks[k].updatedAt) || 0;
+      if (j.segments && j.segments.length && cloudU >= localU){
         const c = _plLocks[k];
-        if (!c || !c.segments.length){ _plLocks[k] = { segments: j.segments }; touched = true; }
+        if (!c || !c.segments.length ||
+            cloudU > localU || JSON.stringify(c.segments) !== JSON.stringify(j.segments)){
+          _plLocks[k] = { segments: j.segments, updatedAt: cloudU || Date.now() };
+          touched = true; segReplaced = !!(c && c.segments.length);
+        }
       }
-      if (j.cur && j.cur.lrc && !_plCurLrcs[k]){
+      if (j.cur && j.cur.lrc && (j.cur.ts || 0) >= ((_plCurLrcs[k] && _plCurLrcs[k].ts) || 0) &&
+          !_plCurLrcs[k]){
         _plCurLrcs[k] = j.cur; touched = true; curAdded = true;
       }
-      if (!touched) return;
+      if (!touched){
+        // 本地更新（本机刚锁定/识别过）→ 回传云端收敛
+        if (((_plLocks[k] && _plLocks[k].updatedAt) || 0) > cloudU ||
+            ((_plCurLrcs[k] && _plCurLrcs[k].ts) || 0) > ((j.cur && j.cur.ts) || 0))
+          _cloudLockUpload(k);
+        return;
+      }
       idbPut('meta', 'locks', _plLocks).catch(() => {});
       idbPut('meta', 'curlrcs', _plCurLrcs).catch(() => {});
-      if (curAdded && _plIdx >= 0 && _plItems[_plIdx] && _plKey(_plItems[_plIdx]) === k){
-        _plLockActive = null;   // 置空 → 监测循环下个周期重新判定（播到段内即自动加载）
-        _plMaybeApplyCurLrc(k); // 云端 cur 歌词到货 → 立即应用（段内则交给锁定篇）
+      if (_plIdx >= 0 && _plItems[_plIdx] && _plKey(_plItems[_plIdx]) === k){
+        if (segReplaced || curAdded){
+          _plLockActive = null;   // 置空 → 监测循环下个周期重新判定（播到段内即自动加载）
+          _plMaybeApplyCurLrc(k); // 云端 cur 歌词到货 → 立即应用（段内则交给锁定篇）
+        }
       }
-      setStatus('☁️ 已从云端恢复歌词资料');
+      setStatus('☁️ 已从云端同步最新歌词资料');
     }catch(e){ /* 无云端资料/网络失败：静默 */ }
+  })();
+}
+/* v3.86 播放中云端更新轮询（25s 节流）：其他设备保存的锁定/歌词热同步到本机 */
+let _cloudPollAt = 0, _cloudPollKey = null;
+function _cloudLockPollTick(k){
+  const now = Date.now();
+  if (_cloudPollKey === k && now - _cloudPollAt < 25000) return;
+  _cloudPollKey = k; _cloudPollAt = now;
+  (async () => {
+    try{
+      const cfg = await _cloudCfg();
+      if (!cfg || !cfg.base) return;
+      const j = await fetch(cfg.base + '/locks/' + _cloudEnc(k) + '.json',
+        { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
+      if (!j) return;
+      let hot = false;
+      const cloudU = j.updatedAt || 0, localU = (_plLocks[k] && _plLocks[k].updatedAt) || 0;
+      if (j.segments && j.segments.length && cloudU > localU){
+        _plLocks[k] = { segments: j.segments, updatedAt: cloudU };
+        idbPut('meta', 'locks', _plLocks).catch(() => {});
+        hot = true;
+      }
+      if (j.cur && j.cur.lrc && (j.cur.ts || 0) > ((_plCurLrcs[k] && _plCurLrcs[k].ts) || 0)){
+        _plCurLrcs[k] = j.cur;
+        idbPut('meta', 'curlrcs', _plCurLrcs).catch(() => {});
+        hot = true;
+      }
+      if (hot && _plIdx >= 0 && _plItems[_plIdx] && _plKey(_plItems[_plIdx]) === k){
+        if (!_plManual) _plLockActive = null;   // 监测循环重判 → 段内自动接播
+        _plMaybeApplyCurLrc(k);
+        setStatus('☁️ 已接收其他设备的锁定歌词，同步播放');
+      }
+    }catch(e){ /* 静默 */ }
   })();
 }
 /* v3.85：本机缓存了这首的「当前歌词」且当前位置不在锁定段内 → 立即应用
