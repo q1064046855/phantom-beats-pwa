@@ -522,7 +522,8 @@ async function handleCloudList(){
     const items = parseCosListXml(xml)
       .map(it => {
         const p = it.key.lastIndexOf('|');
-        return { ...it, name: p >= 0 ? it.key.slice(0, p) : it.key };
+        const nm = (p >= 0 ? it.key.slice(0, p) : it.key).replace(/^songs\//, '');
+        return { ...it, name: nm };
       })
       .sort((a, b) => b.ts - a.ts);
     return J({ ok: true, items });

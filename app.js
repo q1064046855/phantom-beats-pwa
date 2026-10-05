@@ -1413,7 +1413,8 @@ function _plOnlineFetch(){
   plListEl.innerHTML = '<div class="pl-empty">&#x2601;&#xFE0F; 正在加载云端曲库…</div>';
   fetch(API_BASE + '/api/cloud/list').then(r => r.json()).then(res => {
     if (!res || !res.ok) throw new Error(res && res.error || '云端未配置');
-    _plOnlineList = res.items || [];
+    _plOnlineList = (res.items || []).map(it =>
+      ({ ...it, name: String(it.name || '').replace(/^songs\//, '') }));
     if (_plTab === 'online') _plRenderOnline();
   }).catch(err => {
     if (_plTab !== 'online') return;
