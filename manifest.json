@@ -1,7 +1,7 @@
 {
-  "name": "PHANTOM BEATS 音乐可视化",
-  "short_name": "PHANTOM BEATS",
-  "description": "音乐可视化播放器：系统音频/麦克风律动、歌词锁定、歌曲识别与搜索",
+  "name": "炫彩DJ",
+  "short_name": "炫彩DJ",
+  "description": "炫彩DJ：系统音频/麦克风律动可视化、歌词锁定、歌曲识别与搜索",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

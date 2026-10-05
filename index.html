@@ -10,12 +10,13 @@
 <!-- 状态栏透明、页面铺满（刘海区由 CSS env(safe-area-inset-*) 避让，样式里已用） -->
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <!-- 桌面图标下显示的名称 -->
-<meta name="apple-mobile-web-app-title" content="PHANTOM BEATS">
-<title>幻彩律动 · PHANTOM BEATS</title>
+<meta name="apple-mobile-web-app-title" content="炫彩DJ">
+<title>炫彩DJ</title>
 <!-- v3.83 PWA：图标/名称/全屏 + Service Worker（HTTPS 或 localhost 下生效，局域网 http 自动跳过） -->
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-<link rel="apple-touch-icon" href="icon-192.png">
+<!-- v3.87：iOS 主屏图标专用 180×180 不透明底图（透明 PNG 会被 iOS 填白底成白块） -->
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
 <meta name="theme-color" content="#0b0716">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
@@ -473,11 +474,15 @@
     #status{ top:138px; left:10px; max-width:calc(100vw - 20px - 134px); font-size:11px; }
     #hint{ font-size:12px; top:10%; padding:8px 14px; }
 
-    /* 设置面板：近全屏（盖住控件） */
+    /* v3.87 设置面板：竖屏放右下角，宽约半屏、高约 2/3（原近全屏在 iOS 全屏 App 里 ✕ 被状态栏/圆角挡住点不到） */
     #settingsPanel{
-      top:10px; left:10px; right:10px;
-      bottom:calc(10px + env(safe-area-inset-bottom,0px));
-      width:auto; max-height:none;
+      top:auto;
+      bottom:calc(12px + env(safe-area-inset-bottom,0px));
+      right:calc(12px + env(safe-area-inset-right,0px));
+      left:auto;
+      width:max(50vw, 250px);
+      height:min(66vh, 620px);
+      max-height:none;
     }
     /* v3.46e 横屏：设置只占右侧 1/3，调律动线条时左侧 2/3 可见实时状态 */
     @media (orientation:landscape){
@@ -838,7 +843,7 @@
     <div class="pl-cc">
       <button class="pl-ic-btn" id="ppMode" title="播放模式：顺序循环（点一下切换为随机播放）">&#x1F501;&#xFE0E;</button>
       <button class="pl-ic-btn" id="ppPrev" title="上一首">&#x23EE;&#xFE0E;</button>
-      <button id="ppPlay" title="播放 / 暂停">&#x25B6;&#xFE0E;</button>
+      <button id="ppPlay" title="播放 / 暂停"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M8.2 5.6v12.8c0 .9 1 1.5 1.8 1L20 13c.8-.5.8-1.6 0-2.1L10 4.6c-.8-.5-1.8.1-1.8 1z" fill="#fff"/></svg></button>
       <button class="pl-ic-btn" id="ppNext" title="下一首">&#x23ED;&#xFE0E;</button>
       <button class="pl-ic-btn" id="ppLike" title="加入我喜欢的"><span class="h-out">&#x2665;</span><span class="h-in">&#x2665;</span></button>
     </div>

@@ -10,7 +10,7 @@
    ============================================================ */
 
 const FFT_BINS = 64;
-const VERSION = 'v3.86';
+const VERSION = 'v3.87';
 
 /* v3.83 PWA：注册 Service Worker（添加到主屏幕 = 手机 App 体验）。
  * 仅 HTTPS / localhost 下浏览器允许注册；局域网 http://IP 访问自动跳过，功能不受影响。 */
@@ -1746,11 +1746,18 @@ function _plResume(){
   if (pr && pr.catch) pr.catch(() => {});
 }
 
+/* v3.87 播放/暂停图标用内联 SVG（iOS 对 ⏸/▶ 字符缺字形，渲染成彩色小方块） */
+const PP_SVG_PLAY = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">' +
+  '<path d="M8.2 5.6v12.8c0 .9 1 1.5 1.8 1L20 13c.8-.5.8-1.6 0-2.1L10 4.6c-.8-.5-1.8.1-1.8 1z" fill="#fff"/></svg>';
+const PP_SVG_PAUSE = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">' +
+  '<rect x="6.6" y="5" width="4" height="14" rx="1.4" fill="#fff"/>' +
+  '<rect x="13.4" y="5" width="4" height="14" rx="1.4" fill="#fff"/></svg>';
+
 function _plPause(){
   _plManualPause = true;
   playerAudio.pause();
   state.source = 'system';
-  document.getElementById('ppPlay').textContent = '▶';
+  document.getElementById('ppPlay').innerHTML = PP_SVG_PLAY;
   document.getElementById('playerBtn').classList.remove('playing');
   document.getElementById('playerBtn').style.setProperty('--b', '0');
   connectWS();   // 恢复系统音频监听（若从麦克风切来，WS 可能已关）
@@ -1764,7 +1771,7 @@ playerAudio.addEventListener('play', () => {
     analyser.connect(audioCtx.destination);
   }
   state.source = 'player';
-  document.getElementById('ppPlay').textContent = '⏸';
+  document.getElementById('ppPlay').innerHTML = PP_SVG_PAUSE;
   document.getElementById('playerBtn').classList.add('playing');
   _plReanchor();          // v3.52：记录 播放器进度↔系统音频时钟 锚点
   _plSuppressSync(true);
@@ -4095,5 +4102,5 @@ setTimeout(() => hint && hint.classList.add('hide'), 4000);
 canvas.addEventListener('click', () => hint && hint.classList.add('hide'));
 
 // 页面标题 + 初始状态文字(带版本号)
-document.title = '幻彩律动 · PHANTOM BEATS · ' + VERSION;
-setStatus('幻彩律动 · ' + VERSION + ' · 星空 + 自动配色 + 歌词自动跟随');
+document.title = '炫彩DJ · ' + VERSION;   // v3.87 更名（iOS 添加主屏的名称取自 title）
+setStatus('炫彩DJ · ' + VERSION + ' · 星空 + 自动配色 + 歌词自动跟随');
