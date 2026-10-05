@@ -10,7 +10,7 @@
    ============================================================ */
 
 const FFT_BINS = 64;
-const VERSION = 'v3.84';
+const VERSION = 'v3.85';
 
 /* v3.83 PWA：注册 Service Worker（添加到主屏幕 = 手机 App 体验）。
  * 仅 HTTPS / localhost 下浏览器允许注册；局域网 http://IP 访问自动跳过，功能不受影响。 */
@@ -1292,8 +1292,14 @@ let _plAnchor = null;       // {wall,pos,audio} 播放器进度与系统音频�
 /* v3.51 喜欢 / 最近播放 / 标签视图 */
 let _plTab = 'all';         // 'all' | 'recent' | 'liked' | 'online'
 const _plSelected = new Set();   // v3.79：勾选待删除的曲库键
-/* v3.84 云端曲库（腾讯云 COS 对象存储；歌曲+锁定歌词全存云，电脑关机也能听） */
-let _plOnlineList = [];     // 云端曲库缓存 [{key,name,size,ts}]
+/* v3.84 云端曲库（腾讯云 COS 对象存储；歌曲+锁定歌词全存云，电脑关机也能听）
+ * v3.85 键约定：it.key=COS对象键（去songs/前缀，含扩展名）· it.fkey=歌词/曲库键（再去扩展名，
+ *   与本地 _plKey「歌名|字节」一致）· it.name=显示名（去扩展名）。v3.85起新上传的键不再带扩展名。 */
+let _plOnlineList = [];     // 云端曲库缓存 [{key,fkey,name,size,ts}]
+const _dlProg = {};         // fkey -> 0..1 云端下载进度（下载中防重复点击）
+/* v3.85 每首歌的「当前歌词」缓存 {fkey:{lrc,title,artist,source,ts}}（存 IndexedDB，
+ * 上传时随歌一起传云端 locks/<fkey>.json 的 cur 字段，播放云端歌时自动恢复应用） */
+let _plCurLrcs = {};
 const _plLikedKeys = new Set();   // 喜欢键集合（持久化到 localStorage）
 const _plRecentKeys = [];         // 最近播放键，最近在前、去重
 try {
@@ -1409,12 +1415,17 @@ function _cloudEnc(s){
   return encodeURIComponent(String(s)).replace(
     /[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 }
+const _plAudioExtRe = /\.(mp3|flac|m4a|wav|ogg|aac|wma|opus)$/i;
 function _plOnlineFetch(){
   plListEl.innerHTML = '<div class="pl-empty">&#x2601;&#xFE0F; 正在加载云端曲库…</div>';
   fetch(API_BASE + '/api/cloud/list').then(r => r.json()).then(res => {
     if (!res || !res.ok) throw new Error(res && res.error || '云端未配置');
-    _plOnlineList = (res.items || []).map(it =>
-      ({ ...it, name: String(it.name || '').replace(/^songs\//, '') }));
+    _plOnlineList = (res.items || []).map(it => {
+      const key = String(it.key || '').replace(/^songs\//, '');
+      const name = String(it.name || '').replace(/^songs\//, '').replace(_plAudioExtRe, '');
+      return { ...it, key, name,
+        fkey: name + '|' + (it.size || 0) };   // 与本地 _plKey 完全一致（旧上传键带扩展名也归一）
+    });
     if (_plTab === 'online') _plRenderOnline();
   }).catch(err => {
     if (_plTab !== 'online') return;
@@ -1433,16 +1444,21 @@ function _plRenderOnline(){
   plListEl.innerHTML = '';
   _plOnlineList.forEach(it => {
     const d = document.createElement('div');
-    d.className = 'pl-item' + (it.key === curKey ? ' active' : '');
+    d.className = 'pl-item' + (it.fkey === curKey ? ' active' : '');
+    d.dataset.fk = it.fkey;
     const ic = document.createElement('span');
     ic.className = 'pl-ic online';
-    ic.innerHTML = it.key === curKey ? '&#9835;&#xFE0E;' : '&#x2601;&#xFE0E;';
+    ic.innerHTML = it.fkey === curKey ? '&#9835;&#xFE0E;' : '&#x2601;&#xFE0E;';
     const nm = document.createElement('span');
     nm.className = 'pl-name';
     nm.textContent = it.name;
     const sz = document.createElement('span');
     sz.className = 'pl-size';
-    sz.textContent = (it.size / 1048576).toFixed(1) + 'M';
+    if (_dlProg[it.fkey] !== undefined){
+      sz.innerHTML = '&#x2B07;&#xFE0F; ' + Math.round(_dlProg[it.fkey] * 100) + '%';
+    } else {
+      sz.textContent = (it.size / 1048576).toFixed(1) + 'M';
+    }
     const x = document.createElement('button');
     x.className = 'pl-x';
     x.innerHTML = '&#x2715;';
@@ -1453,34 +1469,75 @@ function _plRenderOnline(){
     plListEl.appendChild(d);
   });
 }
+/* v3.85 点云端的歌：先查本机缓存（本地曲库已有=秒播），没有则下载到 IndexedDB
+ * 缓存 → 加入本地曲库 → 播放；下次再听直接放缓存，不再从云端下载。 */
 async function _plPlayOnline(it){
-  let idx = _plItems.findIndex(x => _plKey(x) === it.key);
-  if (idx < 0){
-    const cfg = await _cloudCfg();
-    if (!cfg || !cfg.base){ setStatus('⚠️ 无法获取云端地址'); return; }
-    _plItems.push({
-      name: it.name, online: true, cloud: true, size: it.size,
-      url: cfg.base + '/songs/' + _cloudEnc(it.key),
+  if (_dlProg[it.fkey] !== undefined) return;   // 正在下载中
+  let idx = _plItems.findIndex(x => _plKey(x) === it.fkey);
+  if (idx >= 0){ _plPlay(idx); return; }        // 已缓存：直接播
+  const cfg = await _cloudCfg();
+  if (!cfg || !cfg.base){ setStatus('⚠️ 无法获取云端地址'); return; }
+  const url = cfg.base + '/songs/' + _cloudEnc(it.key);
+  _dlProg[it.fkey] = 0;
+  _plRenderOnline();
+  setStatus('⬇︎ 正在下载到本机缓存：' + it.name + ' 0%');
+  try{
+    const blob = await _cloudGetFile(url, p => {
+      _dlProg[it.fkey] = p;
+      const sz = plListEl.querySelector('.pl-item[data-fk="' +
+        (window.CSS && CSS.escape ? CSS.escape(it.fkey) : it.fkey) + '"] .pl-size');
+      if (sz) sz.innerHTML = '&#x2B07;&#xFE0F; ' + Math.round(p * 100) + '%';
+      const pct = Math.round(p * 100);
+      if (pct % 10 === 0) setStatus('⬇︎ 正在下载到本机缓存：' + it.name + ' ' + pct + '%');
     });
+    delete _dlProg[it.fkey];
+    const file = new File([blob], it.key, { type: blob.type || 'audio/mpeg' });
+    await idbPut('files', it.fkey, file);       // 持久缓存：刷新/重开网页不再下载
+    _plItems.push({ name: it.name, file, url: URL.createObjectURL(file) });
+    await idbPut('meta', 'library', _plItems.filter(x => !x.online).map(x => ({
+      key: _plKey(x), name: x.name, size: x.file.size,
+    }))).catch(() => {});
     idx = _plItems.length - 1;
+    setStatus('● 已缓存并加入曲库：' + it.name + '（下次秒开）');
+    _plPlay(idx);
+  }catch(err){
+    delete _dlProg[it.fkey];
+    setStatus('⚠️ 云端下载失败：' + (err && err.message || err));
+    if (_plTab === 'online') _plRenderOnline();
   }
-  _plPlay(idx);
+}
+/* GET 下载带进度（XHR；fetch 无上传式进度） */
+function _cloudGetFile(url, onProg){
+  return new Promise((res, rej) => {
+    const x = new XMLHttpRequest();
+    x.open('GET', url);
+    x.responseType = 'blob';
+    x.onprogress = e => { if (e.lengthComputable && e.total && onProg) onProg(e.loaded / e.total); };
+    x.onload = () => (x.status >= 200 && x.status < 300)
+      ? res(x.response) : rej(new Error('HTTP ' + x.status));
+    x.onerror = () => rej(new Error('网络错误'));
+    x.send();
+  });
 }
 function _plOnlineDelete(it){
   if (!window.confirm('确定从云端曲库删除「' + it.name + '」吗？\n所有设备都将不再看到这首歌曲')) return;
   setStatus('● 正在从云端曲库删除…');
+  // v3.85：旧版上传的键带扩展名，fkey（去扩展名）与 key 不同时两个都发，服务端容错剥离
+  const keys = it.fkey !== it.key ? [it.key, it.fkey] : [it.key];
   fetch(API_BASE + '/api/cloud/delete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ keys: [it.key] }),
+    body: JSON.stringify({ keys }),
   }).then(r => r.json()).then(j => {
     if (!j.ok){ setStatus('⚠️ 删除失败：' + (j.error || j)); return; }
     _plOnlineList = _plOnlineList.filter(x => x.key !== it.key);
-    // 本地曲库引用与本地锁定同步移除（云端锁已由服务端一并删除）
-    const k = it.key.replace(/^songs\//, '');   // 云键剥掉 songs/ 前缀后才是本地锁键
+    // 本地曲库引用与本地歌词资料同步移除（云端锁已由服务端一并删除）
+    const k = it.fkey;
     delete _plLocks[k];
+    delete _plCurLrcs[k];
     idbPut('meta', 'locks', _plLocks).catch(() => {});
-    const idx = _plItems.findIndex(x => _plKey(x) === k && x.online);
+    idbPut('meta', 'curlrcs', _plCurLrcs).catch(() => {});
+    const idx = _plItems.findIndex(x => _plKey(x) === k);   // 本机缓存的那份也移除
     if (idx >= 0){
       _plItems.splice(idx, 1);
       if (idx === _plIdx){
@@ -1511,27 +1568,45 @@ function _cloudPutFile(url, file, onProg){
   });
 }
 onlineInput.addEventListener('change', async e => {
-  const files = Array.from(e.target.files).filter(f =>
-    /\.(mp3|flac|m4a|wav|ogg|aac|wma|opus)$/i.test(f.name));
+  const files = Array.from(e.target.files).filter(f => _plAudioExtRe.test(f.name));
   e.target.value = '';
   if (!files.length){ setStatus('⚠️ 没有找到音频文件'); return; }
-  let okN = 0, dupN = 0, failN = 0;
+  let okN = 0, dupN = 0, failN = 0, lyN = 0;
   for (let i = 0; i < files.length; i++){
     const f = files[i];
+    const k = f.name.replace(_plAudioExtRe, '') + '|' + f.size;   // 与本地曲库键一致
     setStatus('● 上传到云端曲库（' + (i + 1) + '/' + files.length + '）：' + f.name);
     try{
+      // v3.85：预签名用去扩展名歌名 → 云端键=本地键，锁定/歌词全设备直接互通
       const r = await fetch(API_BASE + '/api/cloud/presign?name=' +
-        encodeURIComponent(f.name) + '&size=' + f.size).then(r => r.json());
+        encodeURIComponent(f.name.replace(_plAudioExtRe, '')) + '&size=' + f.size)
+        .then(r => r.json());
       if (!r || !r.ok){ failN++; continue; }
-      if (r.dup){ dupN++; continue; }
-      await _cloudPutFile(r.url, f, p =>
-        setStatus('● 上传到云端曲库（' + (i + 1) + '/' + files.length + '）：' +
-          f.name + ' ' + Math.round(p * 100) + '%'));
-      okN++;
+      if (r.dup){ dupN++; }
+      else {
+        await _cloudPutFile(r.url, f, p =>
+          setStatus('● 上传到云端曲库（' + (i + 1) + '/' + files.length + '）：' +
+            f.name + ' ' + Math.round(p * 100) + '%'));
+        okN++;
+      }
+      // v3.85 歌词资料随歌上传（锁定篇 + 当前歌词）——重复上传也刷新，方便后补歌词
+      const segs = (_plLocks[k] && _plLocks[k].segments) || [];
+      const cur = _plCurLrcs[k] || null;
+      if (segs.length || cur){
+        const lr = await fetch(API_BASE + '/api/cloud/lock?k=' + encodeURIComponent(k))
+          .then(x => x.json());
+        if (lr && lr.ok && lr.url){
+          await fetch(lr.url, { method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ segments: segs, cur }) });
+          lyN++;
+        }
+      }
     }catch(err){ failN++; }
   }
   setStatus('● 云端曲库：新增 ' + okN + ' 首' +
     (dupN ? '（跳过 ' + dupN + ' 首重复）' : '') +
+    (lyN ? '（歌词同步 ' + lyN + ' 首）' : '') +
     (failN ? '（失败 ' + failN + ' 首）' : ''));
   if (_plTab === 'online') _plOnlineFetch();
 });
@@ -1563,6 +1638,9 @@ async function _plDeleteSelected(){
   // 歌词锁定数据同步
   let lockChanged = false;
   keys.forEach(k => { if (k in _plLocks){ delete _plLocks[k]; lockChanged = true; } });
+  let clrcChanged = false;
+  keys.forEach(k => { if (k in _plCurLrcs){ delete _plCurLrcs[k]; clrcChanged = true; } });
+  if (clrcChanged) idbPut('meta', 'curlrcs', _plCurLrcs).catch(() => {});
   if (lockChanged){
     idbPut('meta', 'locks', _plLocks).catch(() => {});
     _cloudLockDelete(keys);   // v3.84：云端锁定一并清除（防换设备后死而复生）
@@ -1613,9 +1691,10 @@ function _plPlay(i){
   _plManual = null;         // v3.72：手动覆盖不跨歌保留
   const it = _plItems[_plIdx];
   playerAudio.src = it.url;
-  /* v3.84：本机没有这首的锁定歌词时，从云端补拉（fileKey 与云端一致：歌名|字节） */
+  /* v3.85：本机缺锁定篇或缺「当前歌词」时从云端补拉；本地已有缓存歌词立即应用 */
   const _lk = _plKey(it);
-  if (!_plLocks[_lk] || !_plLocks[_lk].segments.length) _cloudLockPull(_lk);
+  if (!_plLocks[_lk] || !_plLocks[_lk].segments.length || !_plCurLrcs[_lk]) _cloudLockPull(_lk);
+  _plMaybeApplyCurLrc(_lk);
   _plEnsureGraph();
   const pr = playerAudio.play();
   if (pr && pr.catch) pr.catch(() => {});
@@ -2001,6 +2080,8 @@ setInterval(() => {
 async function _plRestoreLibrary(){
   try{
     _idb = await idbOpen();
+    const clrc = await idbGet('meta', 'curlrcs');
+    if (clrc) _plCurLrcs = clrc;   // v3.85：每首歌的「当前歌词」缓存
     const locks = await idbGet('meta', 'locks');
     if (locks){
       _plLocks = locks;
@@ -2043,11 +2124,12 @@ function _plCurLocks(){
   return _plLocks[_plKey(_plItems[_plIdx])] || null;
 }
 
-/* ============ v3.84 锁定歌词云端同步 ============
- * 本地保存锁定 → 防抖直传 COS（SCF 签发预签名 PUT）；
- * 播放时本机没有该歌锁定 → 从 COS 公有读直拉补齐（只补缺、不覆盖本地已有）。
- * fileKey 与本地曲库键一致（歌名|字节）→ 电脑/手机同名同大小文件共享同一份锁定，
- * 在任何一台设备上锁定/编辑，其他设备播放同一首歌时自动恢复。 */
+/* ============ v3.84 锁定歌词云端同步（v3.85 扩展为「歌词资料」同步） ============
+ * 云端 locks/<fileKey>.json = { segments:[锁定篇], cur:{lrc,title,artist,source} 当前歌词 }
+ * 本地保存锁定/识别出新词 → 防抖直传 COS（SCF 签发预签名 PUT）；
+ * 播放时本机缺资料 → 从 COS 公有读直拉补齐（只补缺、不覆盖本地已有），
+ * cur 歌词到货即自动应用（正确对齐当前播放位置）。
+ * fileKey 与本地曲库键一致（歌名|字节）→ 电脑/手机同名同大小文件共享同一份资料。 */
 function _plLocksSave(){
   idbPut('meta', 'locks', _plLocks).catch(() => {});
   if (_plIdx >= 0 && _plItems[_plIdx]) _cloudLockUpload(_plKey(_plItems[_plIdx]));
@@ -2057,8 +2139,9 @@ function _cloudLockUpload(k){
   clearTimeout(_cloudLockT[k]);
   _cloudLockT[k] = setTimeout(async () => {
     try{
-      const data = _plLocks[k];
-      if (!data) return;
+      const segs = (_plLocks[k] && _plLocks[k].segments) || [];
+      const cur = _plCurLrcs[k] || null;
+      if (!segs.length && !cur) return;   // 没有任何歌词资料就不上传
       const cfg = await _cloudCfg();
       if (!cfg || !cfg.base) return;
       const r = await fetch(API_BASE + '/api/cloud/lock?k=' + encodeURIComponent(k))
@@ -2066,7 +2149,7 @@ function _cloudLockUpload(k){
       if (!r || !r.ok || !r.url) return;
       await fetch(r.url, { method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data) });
+        body: JSON.stringify({ segments: segs, cur }) });
     }catch(e){ /* 云同步失败静默：本地已存，不影响使用 */ }
   }, 1500);
 }
@@ -2077,17 +2160,42 @@ function _cloudLockPull(k){
       if (!cfg || !cfg.base) return;
       const j = await fetch(cfg.base + '/locks/' + _cloudEnc(k) + '.json',
         { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
-      if (!j || !j.segments || !j.segments.length) return;
-      const cur = _plLocks[k];
-      if (cur && cur.segments.length) return;   // 本地已有锁定：云端只补缺
-      _plLocks[k] = j;
-      idbPut('meta', 'locks', _plLocks).catch(() => {});
-      if (_plIdx >= 0 && _plItems[_plIdx] && _plKey(_plItems[_plIdx]) === k){
-        _plLockActive = null;   // 置空 → 监测循环下个周期重新判定（播到段内即自动加载）
+      if (!j) return;
+      let touched = false, curAdded = false;
+      if (j.segments && j.segments.length){
+        const c = _plLocks[k];
+        if (!c || !c.segments.length){ _plLocks[k] = { segments: j.segments }; touched = true; }
       }
-      setStatus('☁️ 已从云端恢复锁定歌词（' + j.segments.length + ' 篇）');
-    }catch(e){ /* 无云端锁/网络失败：静默 */ }
+      if (j.cur && j.cur.lrc && !_plCurLrcs[k]){
+        _plCurLrcs[k] = j.cur; touched = true; curAdded = true;
+      }
+      if (!touched) return;
+      idbPut('meta', 'locks', _plLocks).catch(() => {});
+      idbPut('meta', 'curlrcs', _plCurLrcs).catch(() => {});
+      if (curAdded && _plIdx >= 0 && _plItems[_plIdx] && _plKey(_plItems[_plIdx]) === k){
+        _plLockActive = null;   // 置空 → 监测循环下个周期重新判定（播到段内即自动加载）
+        _plMaybeApplyCurLrc(k); // 云端 cur 歌词到货 → 立即应用（段内则交给锁定篇）
+      }
+      setStatus('☁️ 已从云端恢复歌词资料');
+    }catch(e){ /* 无云端资料/网络失败：静默 */ }
   })();
+}
+/* v3.85：本机缓存了这首的「当前歌词」且当前位置不在锁定段内 → 立即应用
+ * （走 applyServerMessage 的 lyrics 通道，复用对齐/自动跟随整套机制） */
+function _plMaybeApplyCurLrc(k){
+  const c = _plCurLrcs[k];
+  if (!c || !c.lrc) return;
+  if (_plManual) return;                       // 手动覆盖中不打断
+  const data = _plLocks[k];
+  if (data && data.segments.length){
+    const p = playerAudio.currentTime;
+    if (data.segments.some(s => p >= s.start && p <= s.end)) return;   // 段内：交给锁定篇
+  }
+  applyServerMessage({ data: JSON.stringify({
+    type: 'lyrics', source: c.source || 'cloud',
+    title: c.title || '', artist: c.artist || '',
+    lrc: c.lrc, audio_offset_sec: playerAudio.currentTime || 0,
+  })});
 }
 function _cloudLockDelete(keys){
   if (!keys.length) return;
@@ -2710,6 +2818,16 @@ function applyServerMessage(e){
           state.lyrics.title = j.title || '';
           state.lyrics.artist = j.artist || '';
           state.lyrics.source = j.source || '';
+          /* v3.85：播放器歌曲识别/换版本到词 → 存入该歌的「当前歌词」缓存并同步云端
+             （上传时随歌带走；其他设备播放云端版自动恢复，无需再识别） */
+          if (state.source === 'player' && _plIdx >= 0 && _plItems[_plIdx] &&
+              !_plItems[_plIdx].online && j.lrc){
+            const ck = _plKey(_plItems[_plIdx]);
+            _plCurLrcs[ck] = { lrc: j.lrc, title: j.title || '',
+              artist: j.artist || '', source: j.source || '', ts: Date.now() };
+            idbPut('meta', 'curlrcs', _plCurLrcs).catch(() => {});
+            _cloudLockUpload(ck);
+          }
           // 识别/换版本成功 → 只把【歌名】放进搜索框（不带歌手），方便直接改词再搜
           if (subsSearch && j.title){
             subsSearch.value = j.title;
