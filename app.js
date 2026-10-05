@@ -10,7 +10,7 @@
    ============================================================ */
 
 const FFT_BINS = 64;
-const VERSION = 'v3.87';
+const VERSION = 'v3.88';
 
 /* v3.83 PWA：注册 Service Worker（添加到主屏幕 = 手机 App 体验）。
  * 仅 HTTPS / localhost 下浏览器允许注册；局域网 http://IP 访问自动跳过，功能不受影响。 */
@@ -1264,9 +1264,10 @@ requestAnimationFrame(pullFrame);
    音频链路：<audio id="playerAudio"> → MediaElementSource
             → analyser（v3.47 同款算法）→ destination（扬声器）
    面板居中半透明；左下角音符按钮播放时旋转+炫彩发光+随律动震动。
-   语义：
-     · 播放中 state.source='player' → WS 系统帧被忽略，波形严格匹配播放器
-     · 手动暂停 → state.source 回 'system'，恢复系统音频监听
+   语义（v3.88 起）：
+     · 播放中 state.source='player' → WS 系统帧被忽略，波形严格匹配播放器；音源按钮亮「播放器」
+     · 手动暂停 → 音源保持「播放器」（波形静止）；要听系统声音由用户显式点「系统音频」
+     · 切「麦克风」→ 立即暂停播放器，直接从麦克风收音
      · 自动切歌/列表循环 → 始终保持 player
    ============================================================ */
 const playerAudio = document.getElementById('playerAudio');
@@ -1279,6 +1280,20 @@ let _plIdx = -1;
 let _plNode = null;         // MediaElementAudioSourceNode（每个元素只能创建一次）
 let _plSwitching = false;   // 切歌中：忽略本次 pause 事件
 let _plManualPause = false; // 用户主动点了暂停
+let _plAutoResume = false;  // v3.88 来电/微信语音打断后待自动恢复
+let _plResumeTimer = null;  // v3.88 打断恢复看门狗（2s 重试）
+function _plInterruptStopWatch(){
+  if (_plResumeTimer){ clearInterval(_plResumeTimer); _plResumeTimer = null; }
+}
+function _plInterruptTry(){
+  if (!_plAutoResume || _plIdx < 0){ _plInterruptStopWatch(); return; }
+  if (!playerAudio.paused){ _plAutoResume = false; _plInterruptStopWatch(); return; }
+  const pr = playerAudio.play();
+  if (pr && pr.then) pr.then(() => {
+    _plAutoResume = false; _plInterruptStopWatch();
+    setStatus('▶ 通话结束，已自动恢复播放');
+  }).catch(() => {});   // 仍被打断中：等下一次重试
+}
 let _plShuffle = false;     // false=顺序循环, true=随机播放
 /* v3.52 歌词锁定：{fileKey:{segments:[{start,end,title,artist,source,lines}]}}（存 IndexedDB） */
 let _plLocks = {};
@@ -1756,31 +1771,50 @@ const PP_SVG_PAUSE = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidde
 function _plPause(){
   _plManualPause = true;
   playerAudio.pause();
-  state.source = 'system';
+  /* v3.88：暂停后音源保持「播放器」（按钮亮播放器、波形静止）；
+     不再自动回系统音频——要听系统声音由用户显式点「系统音频」 */
   document.getElementById('ppPlay').innerHTML = PP_SVG_PLAY;
   document.getElementById('playerBtn').classList.remove('playing');
   document.getElementById('playerBtn').style.setProperty('--b', '0');
-  connectWS();   // 恢复系统音频监听（若从麦克风切来，WS 可能已关）
+  if ('mediaSession' in navigator) try{ navigator.mediaSession.playbackState = 'paused'; }catch(e){}
 }
 
 playerAudio.addEventListener('play', () => {
   _plSwitching = false;
+  _plAutoResume = false; _plInterruptStopWatch();   // v3.88 正常播放清掉打断恢复标志
   // 若麦克风仍在工作：停掉麦克风（否则会和播放器声音叠加进 analyser）
   if (micStream || _micNode || _micProc){
     stopAudio();
     analyser.connect(audioCtx.destination);
   }
   state.source = 'player';
+  _setSourceUI('player');   // v3.88 音源高亮跟随播放器
   document.getElementById('ppPlay').innerHTML = PP_SVG_PAUSE;
   document.getElementById('playerBtn').classList.add('playing');
+  if ('mediaSession' in navigator){
+    try{ navigator.mediaSession.playbackState = 'playing'; }catch(e){}
+    try{   // v3.88 锁屏/后台播放：媒体会话元数据（歌名上锁屏、耳机/控制中心可控）
+      const cur = _plItems[_plIdx];
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: (cur && cur.name) || '本地歌曲', artist: '炫彩DJ', album: '本地曲库'
+      });
+    }catch(e){}
+  }
   _plReanchor();          // v3.52：记录 播放器进度↔系统音频时钟 锚点
   _plSuppressSync(true);
 });
 playerAudio.addEventListener('pause', () => {
   if (_plSwitching) return;      // 换 src 切歌引起的 pause
   _plSuppressSync(true);         // v3.52：暂停 → 解除屏蔽窗口
-  if (!_plManualPause) return;   // 自然播完：ended 会自动切下一首
-  _plManualPause = false;        // 音源切换已在 _plPause() 完成
+  if (_plManualPause){ _plManualPause = false; return; }   // 用户手动暂停
+  /* v3.88 来电/微信语音打断：系统强制 pause（非手动、非播完）→ 标记待恢复，
+     挂断后（回前台/焦点回来/看门狗重试）自动恢复播放 */
+  if (playerAudio.ended) return;
+  if (playerAudio.currentTime <= 0.2) return;   // 尚未真正开播
+  if (isFinite(playerAudio.duration) && playerAudio.duration - playerAudio.currentTime < 0.5) return;  // 即将播完
+  _plAutoResume = true;
+  if (!_plResumeTimer) _plResumeTimer = setInterval(_plInterruptTry, 2000);
+  setStatus('📞 通话中已静音，挂断后自动恢复播放');
 });
 playerAudio.addEventListener('ended', () => { _plNext(); });
 playerAudio.addEventListener('seeked', () => {
@@ -1862,8 +1896,20 @@ document.getElementById('plAdd').onclick = () =>
   document.getElementById('folderInput').click();
 document.getElementById('ppPlay').onclick = () => {
   if (!_plItems.length){ document.getElementById('folderInput').click(); return; }
-  if (playerAudio.paused) _plResume(); else _plPause();
+  if (playerAudio.paused){ _plManualPause = false; _plResume(); } else _plPause();
 };
+/* v3.88 来电挂断/回前台 → 立即尝试恢复播放（看门狗兜底每 2s 重试） */
+document.addEventListener('visibilitychange', () => { if (!document.hidden) _plInterruptTry(); });
+window.addEventListener('pageshow', () => _plInterruptTry());
+window.addEventListener('focus', () => _plInterruptTry());
+/* v3.88 Media Session：锁屏/控制中心/耳机线控 显示歌名并可控播放/暂停/上下曲，
+   同时提升 iOS PWA 后台播放稳定性（standalone 切后台/锁屏不中断） */
+if ('mediaSession' in navigator){
+  try{ navigator.mediaSession.setActionHandler('play', () => { _plManualPause = false; _plResume(); }); }catch(e){}
+  try{ navigator.mediaSession.setActionHandler('pause', () => _plPause()); }catch(e){}
+  try{ navigator.mediaSession.setActionHandler('previoustrack', () => _plPrev()); }catch(e){}
+  try{ navigator.mediaSession.setActionHandler('nexttrack', () => _plNext()); }catch(e){}
+}
 document.getElementById('ppNext').onclick = _plNext;
 document.getElementById('ppPrev').onclick = _plPrev;
 document.getElementById('ppLike').onclick = _plToggleLike;
@@ -3170,22 +3216,38 @@ function setStatus(msg){
   setStatus._t = setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 4000);
 }
 
-// 音源
+// 音源（v3.88：播放器成为一等音源——播放歌曲时自动亮「播放器」；切「麦克风」立即暂停播放器）
+function _setSourceUI(src){
+  document.querySelectorAll('#sourceSeg .seg-btn').forEach(x =>
+    x.classList.toggle('active', x.dataset.source === src));
+}
 document.querySelectorAll('#sourceSeg .seg-btn').forEach(b => {
   b.onclick = () => {
-    document.querySelectorAll('#sourceSeg .seg-btn').forEach(x => x.classList.remove('active'));
-    b.classList.add('active');
     const src = b.dataset.source;
-    state.source = src;
     if (src === 'system'){
+      _setSourceUI(src);
+      state.source = src;
       stopAudio();
       connectWS();
       setStatus('● 监听系统音频...');
     } else if (src === 'mic'){
+      _setSourceUI(src);
+      state.source = src;
+      if (!playerAudio.paused) _plPause();   // 麦克风与播放器互斥：切麦克风立即停歌（_plPause 不再改音源，source 保持 mic）
       stopAudio();
       if (ws) ws.close();
       startMicMode();
       setStatus('● 麦克风已开启');
+    } else if (src === 'player'){
+      stopAudio();   // 停掉麦克风（若在收音）
+      if (_plIdx >= 0 && _plItems.length){
+        _setSourceUI(src);
+        state.source = src;
+        if (playerAudio.paused){ _plManualPause = false; _plResume(); }
+      } else {
+        setStatus('⚠️ 曲库还没有歌，先点「＋ 添加本地歌曲」导入');
+        _setSourceUI(state.source);   // 回退高亮
+      }
     }
   };
 });
