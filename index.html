@@ -21,23 +21,34 @@
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{width:100%;height:100%;overflow:hidden;background:#000;color:#fff;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;-webkit-user-select:none;user-select:none}
+  /* v3.92 安全区/视口变量：默认=物理边；rot90 旋转模式下在 html.rot90 body 里重映射
+     （物理屏幕的边与旋转后 body 的本地边互换，直接写 env()/vw 会错位） */
+  body{
+    --sat:env(safe-area-inset-top,0px);--sar:env(safe-area-inset-right,0px);
+    --sab:env(safe-area-inset-bottom,0px);--sal:env(safe-area-inset-left,0px);
+    --vpw:100vw;--vph:100vh;
+  }
   canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;touch-action:none}
   /* v3.90 强制横屏：iOS 不支持 screen.orientation.lock，用整体旋转 90° 实现。
      body 旋转后，内部所有 fixed 元素改为相对 body 定位 → 整个 UI 跟着转；
      画布尺寸由 app.js resize() 按「宽=innerHeight、高=innerWidth」重算。
-     关闭动画防旋转瞬间闪屏。 */
+     关闭动画防旋转瞬间闪屏。
+     v3.92：变量重映射——物理右=本地上 / 物理下=本地右 / 物理左=本地底 / 物理上=本地左。 */
   html.rot90 body{
     position:absolute;top:0;left:0;
     transform:translateX(100vw) rotate(90deg);
     transform-origin:top left;
     width:100vh;height:100vw;
+    --sat:env(safe-area-inset-right,0px);--sar:env(safe-area-inset-bottom,0px);
+    --sab:env(safe-area-inset-left,0px);--sal:env(safe-area-inset-top,0px);
+    --vpw:100vh;--vph:100vw;
   }
   html.rot90 canvas{width:100%;height:100%}
   /* v3.81 手势按钮覆盖层：拖歌词时「锁定/编辑/解锁」按钮画在这里，压在设置/播放器面板之上 */
   #lockOverlay{position:fixed;inset:0;z-index:45;pointer-events:none;display:none}
 
   #ui{
-    position:fixed;top:calc(20px + env(safe-area-inset-top, 0px));right:calc(20px + env(safe-area-inset-right, 0px));
+    position:fixed;top:calc(20px + var(--sat));right:calc(20px + var(--sar));
     background:rgba(8,8,14,0.72);
     border:1px solid rgba(255,255,255,0.10);
     border-radius:14px;
@@ -47,8 +58,8 @@
     width:auto;
     display:flex;align-items:center;gap:12px;
     /* 左侧给左上角歌名预留 ~260px，按钮排不下时换行，绝不遮挡歌名 */
-    max-width:calc(100vw - 40px - 260px);
-    max-height:calc(100vh - 40px);
+    max-width:calc(var(--vpw) - 40px - 260px);
+    max-height:calc(var(--vph) - 40px);
     overflow:visible;
     transition:opacity .25s, transform .25s;
     z-index:10;
@@ -217,9 +228,9 @@
 
   /* 设置三级面板 */
   #settingsPanel{
-    position:fixed;top:calc(78px + env(safe-area-inset-top,0px));right:calc(20px + env(safe-area-inset-right,0px));
+    position:fixed;top:calc(78px + var(--sat));right:calc(20px + var(--sar));
     z-index:12;display:none;
-    width:min(360px,calc(100vw - 40px));max-height:calc(100vh - 100px);overflow-y:auto;
+    width:min(360px,calc(var(--vpw) - 40px));max-height:calc(var(--vph) - 100px);overflow-y:auto;
     background:rgba(10,11,20,.86);border:1px solid rgba(255,255,255,.12);
     border-radius:14px;backdrop-filter:blur(16px) saturate(150%);
     -webkit-backdrop-filter:blur(16px) saturate(150%);
@@ -241,7 +252,7 @@
   #playerPanel{
     position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
     z-index:40;display:none;flex-direction:column;
-    width:min(430px,92vw);max-height:84vh;
+    width:min(430px,92*var(--vpw)/100);max-height:calc(84*var(--vph)/100);
     background:rgba(28,24,52,.42);border:1px solid rgba(255,255,255,.16);border-radius:20px;
     backdrop-filter:blur(22px) saturate(170%);-webkit-backdrop-filter:blur(22px) saturate(170%);
     box-shadow:0 24px 80px rgba(0,0,0,.55),0 0 60px rgba(139,92,246,.12);overflow:hidden;
@@ -330,7 +341,7 @@
   /* 常态：半透明、静止、不发光 */
   #playerBtn{
     --b:0;
-    position:fixed;z-index:35;left:calc(22px + env(safe-area-inset-left,0px));bottom:calc(22px + env(safe-area-inset-bottom,0px));
+    position:fixed;z-index:35;left:calc(22px + var(--sal));bottom:calc(22px + var(--sab));
     width:70px;height:70px;border-radius:50%;border:1px solid rgba(255,255,255,.18);cursor:pointer;
     display:flex;align-items:center;justify-content:center;padding:0;color:#fff;line-height:1;
     background:rgba(124,58,237,.42);
@@ -381,7 +392,7 @@
   @keyframes pbVibe{from{rotate:-1.6deg}to{rotate:1.6deg}}
 
   #showBtn{
-    position:fixed;top:calc(20px + env(safe-area-inset-top, 0px));right:calc(20px + env(safe-area-inset-right, 0px));z-index:11;
+    position:fixed;top:calc(20px + var(--sat));right:calc(20px + var(--sar));z-index:11;
     display:none;
   }
   #showBtn.show{display:block;}
@@ -455,10 +466,10 @@
     }
     /* 贴最上方：搜索框 + 搜索 + 歌词版本更换（宽度按内容，排不下才横滑，无多余空白） */
     #topSearchRow{
-      top:calc(10px + env(safe-area-inset-top,0px));
-      left:calc(10px + env(safe-area-inset-left,0px));
+      top:calc(10px + var(--sat));
+      left:calc(10px + var(--sal));
       right:auto;
-      max-width:calc(100vw - 20px - 134px);
+      max-width:calc(var(--vpw) - 20px - 134px);
       overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;
     }
     #topSearchRow::-webkit-scrollbar{display:none}
@@ -466,8 +477,8 @@
     #topSearchRow #subsSearch{flex:0 0 auto;width:112px;min-width:0}
     /* 右上角竖排：①全屏 ②识别歌曲 ③设置 */
     #sideBtnRow{
-      top:calc(10px + env(safe-area-inset-top,0px));
-      right:calc(10px + env(safe-area-inset-right,0px));
+      top:calc(10px + var(--sat));
+      right:calc(10px + var(--sar));
       flex-direction:column;align-items:stretch;
     }
     /* v3.91 修复「按钮隐藏后仍点得到」：收起态两行必须彻底不可点
@@ -488,47 +499,47 @@
 
     /* 顶部被搜索行+竖排按钮占用，歌名胶囊/倒计时/状态条整体下移 */
     #nowPlaying{
-      top:68px; left:10px; max-width:calc(100vw - 20px - 134px);
+      top:68px; left:10px; max-width:calc(var(--vpw) - 20px - 134px);
       font-size:13px; padding:6px 12px;
     }
-    #autoLockChip{ top:102px; left:10px; max-width:calc(100vw - 20px - 134px); font-size:12px; }
-    #status{ top:138px; left:10px; max-width:calc(100vw - 20px - 134px); font-size:11px; }
+    #autoLockChip{ top:102px; left:10px; max-width:calc(var(--vpw) - 20px - 134px); font-size:12px; }
+    #status{ top:138px; left:10px; max-width:calc(var(--vpw) - 20px - 134px); font-size:11px; }
     #hint{ font-size:12px; top:10%; padding:8px 14px; }
 
     /* v3.87 设置面板：竖屏放右下角，宽约半屏、高约 2/3（原近全屏在 iOS 全屏 App 里 ✕ 被状态栏/圆角挡住点不到） */
     #settingsPanel{
       top:auto;
-      bottom:calc(12px + env(safe-area-inset-bottom,0px));
-      right:calc(12px + env(safe-area-inset-right,0px));
+      bottom:calc(12px + var(--sab));
+      right:calc(12px + var(--sar));
       left:auto;
-      width:max(50vw, 250px);
-      height:min(66vh, 620px);
+      width:max(calc(50*var(--vpw)/100), 250px);
+      height:min(calc(66*var(--vph)/100), 620px);
       max-height:none;
     }
     /* v3.46e 横屏：设置只占右侧 1/3，调律动线条时左侧 2/3 可见实时状态 */
     @media (orientation:landscape){
       #settingsPanel{
         left:auto;
-        width:calc((100vw - 30px)/3);
+        width:calc((var(--vpw) - 30px)/3);
       }
     }
 
     /* v3.50 播放器保持居中弹层；矮横屏收窄边距，避免列表太挤 */
     @media (orientation:landscape) and (max-height:500px){
-      #playerPanel{max-height:92vh}
+      #playerPanel{max-height:calc(92*var(--vph)/100)}
       .pl-list{min-height:60px}
     }
 
     /* 歌词全列表面板：全宽、上半屏 */
     #lyricsAllPanel{
       top:10px; left:10px; right:10px; bottom:auto;
-      width:auto; height:min(62vh, 520px);
+      width:auto; height:min(calc(62*var(--vph)/100), 520px);
     }
 
     /* 收起/沉浸态的「控制台」召唤按钮：右上角 */
     #showBtn{
-      top:calc(10px + env(safe-area-inset-top,0px));
-      right:calc(10px + env(safe-area-inset-right,0px));
+      top:calc(10px + var(--sat));
+      right:calc(10px + var(--sar));
       bottom:auto;
       min-height:40px;padding:8px 14px;
     }
@@ -549,15 +560,15 @@
   /* v3.59：编辑面板只占左侧一条——横屏 1/3、竖屏 1/2，右侧留空给滚动区 */
   .lv-panel{
     display:flex;flex-direction:column;height:100%;
-    width:33.3333vw;min-width:260px;max-width:420px;pointer-events:auto;
+    width:calc(33.3333*var(--vpw)/100);min-width:260px;max-width:420px;pointer-events:auto;
     background:rgba(4,6,14,.93);backdrop-filter:blur(10px);
     -webkit-backdrop-filter:blur(10px);
-    padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(12px + env(safe-area-inset-bottom,0px));
+    padding:calc(12px + var(--sat)) 12px calc(12px + var(--sab));
     border-right:1px solid rgba(255,255,255,.12);
     box-shadow:8px 0 32px rgba(0,0,0,.45);
     position:relative;   /* v3.64：让内部的滚动条 absolute 定位在面板右缘 */
   }
-  @media (orientation:portrait){ .lv-panel{width:42vw;min-width:0;max-width:300px} }
+  @media (orientation:portrait){ .lv-panel{width:calc(42*var(--vpw)/100);min-width:0;max-width:300px} }
   .lv-scrollzone{flex:1;pointer-events:auto;touch-action:none}
   /* v3.63：编辑页最右边网页式滚动条 */
   .lv-scrollbar{

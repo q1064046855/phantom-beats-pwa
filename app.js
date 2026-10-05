@@ -10,7 +10,7 @@
    ============================================================ */
 
 const FFT_BINS = 64;
-const VERSION = 'v3.91';
+const VERSION = 'v3.92';
 
 /* v3.83 PWA：注册 Service Worker（添加到主屏幕 = 手机 App 体验）。
  * 仅 HTTPS / localhost 下浏览器允许注册；局域网 http://IP 访问自动跳过，功能不受影响。 */
@@ -1561,42 +1561,59 @@ function _plRenderOnline(){
     plListEl.appendChild(d);
   });
 }
-/* v3.85 点云端的歌：先查本机缓存（本地曲库已有=秒播），没有则下载到 IndexedDB
- * 缓存 → 加入本地曲库 → 播放；下次再听直接放缓存，不再从云端下载。 */
+/* v3.92 点云端的歌：① 本机已有文件缓存=秒播；② 否则【直接用云端 URL 流式播放】
+ * （音频元素原生边下边播，COS 支持 Range），不再强制整本下载完才出声；
+ * 后台静默缓存整本 → Cache API → IDB 文件，升级为本地条目（离线可播、下次秒开）。
+ * 背景：iOS 上 Safari 与主屏 PWA 的存储相互隔离，删除后重新「添加到主屏幕」
+ * 必然清空旧 PWA 数据——旧设计每次重装都要整本重下，v3.92 起点了立即播放。 */
 async function _plPlayOnline(it){
-  if (_dlProg[it.fkey] !== undefined) return;   // 正在下载中
-  let idx = _plItems.findIndex(x => _plKey(x) === it.fkey);
-  if (idx >= 0){ _plPlay(idx); return; }        // 已缓存：直接播
+  if (_dlProg[it.fkey] !== undefined) return;        // （兼容）下载进度态
+  const idx = _plItems.findIndex(x => _plKey(x) === it.fkey);
+  if (idx >= 0){ _plPlay(idx); return; }             // 已缓存文件或已建流条目：直接播
   const cfg = await _cloudCfg();
   if (!cfg || !cfg.base){ setStatus('⚠️ 无法获取云端地址'); return; }
   const url = cfg.base + '/songs/' + _cloudEnc(it.key);
-  _dlProg[it.fkey] = 0;
-  _plRenderOnline();
-  setStatus('⬇︎ 正在下载到本机缓存：' + it.name + ' 0%');
+  _plItems.push({ name: it.name, url, size: it.size, online: true });
+  _plPlay(_plItems.length - 1);
+  setStatus('☁ 云端播放中（后台自动缓存，下次秒开）');
+  _plCloudCache(it, url, _plItems.length - 1);
+}
+/* 后台缓存整本：Cache API（同 PWA 内跨会话秒取）→ IDB 文件（离线）→ 条目升级。
+   任何一步失败都静默：流媒体播放不受影响。不打断当前播放，下次播放自动走本地。 */
+const _CLOUD_CACHE = 'cloud-songs-v1';
+const _cloudCaching = new Set();
+async function _plCloudCache(it, url, idx){
+  if (_cloudCaching.has(url)) return;
+  _cloudCaching.add(url);
   try{
-    const blob = await _cloudGetFile(url, p => {
-      _dlProg[it.fkey] = p;
-      const sz = plListEl.querySelector('.pl-item[data-fk="' +
-        (window.CSS && CSS.escape ? CSS.escape(it.fkey) : it.fkey) + '"] .pl-size');
-      if (sz) sz.innerHTML = '&#x2B07;&#xFE0F; ' + Math.round(p * 100) + '%';
-      const pct = Math.round(p * 100);
-      if (pct % 10 === 0) setStatus('⬇︎ 正在下载到本机缓存：' + it.name + ' ' + pct + '%');
-    });
-    delete _dlProg[it.fkey];
-    const file = new File([blob], it.key, { type: blob.type || 'audio/mpeg' });
-    await idbPut('files', it.fkey, file);       // 持久缓存：刷新/重开网页不再下载
-    _plItems.push({ name: it.name, file, url: URL.createObjectURL(file) });
+    let res = null;
+    if ('caches' in window){
+      const cch = await caches.open(_CLOUD_CACHE);
+      res = await cch.match(url);
+      if (!res){
+        res = await fetch(url);
+        if (res && res.ok) await cch.put(url, res.clone());
+      }
+    } else {
+      res = await fetch(url);
+    }
+    if (!res || !res.ok) return;
+    const fkey = it.fkey || (it.name + '|' + it.size);
+    const blob = await res.clone().blob();
+    const file = new File([blob], it.name || it.key || 'song', { type: blob.type || 'audio/mpeg' });
+    await idbPut('files', fkey, file);              // 持久文件：刷新/重开/离线都能播
+    const cur = _plItems[idx];
+    if (cur && cur.online){
+      cur.file = file;
+      delete cur.online;
+      cur.url = URL.createObjectURL(file);           // 不换当前 src：下次播放才走本地
+    }
     await idbPut('meta', 'library', _plItems.filter(x => !x.online).map(x => ({
       key: _plKey(x), name: x.name, size: x.file.size,
     }))).catch(() => {});
-    idx = _plItems.length - 1;
-    setStatus('● 已缓存并加入曲库：' + it.name + '（下次秒开）');
-    _plPlay(idx);
-  }catch(err){
-    delete _dlProg[it.fkey];
-    setStatus('⚠️ 云端下载失败：' + (err && err.message || err));
-    if (_plTab === 'online') _plRenderOnline();
-  }
+    setStatus('● 已缓存到本机：' + it.name + '（离线也能播）');
+  }catch(e){ /* 后台缓存失败：不影响流式播放，下次点击再试 */ }
+  finally { _cloudCaching.delete(url); }
 }
 /* GET 下载带进度（XHR；fetch 无上传式进度） */
 function _cloudGetFile(url, onProg){
@@ -3217,11 +3234,20 @@ async function _plExtractClip(pAtClick){
   const b = Math.min(dur, a + 15);
   const ext = (((it.file && it.file.name) || it.name || '').split('.').pop() || '').toLowerCase();
   let file = it.file;
-  if (!file && it.url){   // 云端直链播放（未下载到本机）：整段拉回再裁
-    setStatus('⬇ 正在拉取音频用于识别…');
-    const res = await fetch(it.url);
-    if (!res.ok) throw new Error('音频下载失败 HTTP ' + res.status);
-    file = await res.blob();
+  if (!file && it.url){   // 云端直链播放（未升级本地条目）：先查后台缓存，没有再拉回
+    let hit = null;
+    try{
+      if ('caches' in window){
+        hit = await caches.match(it.url);
+        if (hit) file = await hit.blob();
+      }
+    }catch(e){}
+    if (!file){
+      setStatus('⬇ 正在拉取音频用于识别…');
+      const res = await fetch(it.url);
+      if (!res.ok) throw new Error('音频下载失败 HTTP ' + res.status);
+      file = await res.blob();
+    }
   }
   if (!file) throw new Error('找不到音频文件');
   if (ext === 'mp3' || ext === 'flac'){
@@ -4144,21 +4170,63 @@ showBtn.addEventListener('click', e => { e.stopPropagation(); pinned = true; ref
 
 /* ============================================================
    v3.90 强制横屏切换：手机没开「自动旋转」也能横屏使用。
-   iOS 不支持 screen.orientation.lock，改用 CSS 整体旋转 90°
-   （html.rot90 body，见 index.html），画布与手势坐标在 resize/_rotXY 换算。
+   v3.92 双通道：
+     ① 系统级真横屏 screen.orientation.lock('landscape')——仅主屏 PWA /
+        全屏上下文可用（iOS 主屏 Web App 16.4+ 支持）。真横屏时系统按
+        「竖直方向紧凑」规则【自动隐藏状态栏】（时间/电池），所有面板按
+        真实横屏坐标渲染，无截断；关闭时 unlock。
+     ② 不支持或被拒绝（Safari 标签页 / 旧设备）→ CSS 整体旋转 90°
+       （html.rot90 body，见 index.html），坐标经 _rotXY 换算；
+       v3.92 已用重映射变量修掉面板错位/X 超出/按钮截断。
    状态存 localStorage，刷新后保持。 */
 const rotBtn = document.getElementById('rotBtn');
 if (rotBtn){
-  const _rotApply = on => {
-    document.documentElement.classList.toggle('rot90', on);
+  let _rotReal = false;   // ① 系统真横屏已生效（此时禁止 CSS 旋转/坐标转换）
+  /* 请求系统横屏锁定。部分环境（Electron/受限 WebView）Promise 可能长期挂起：
+     给 700ms，未决即判失败走 CSS 方案；若之后晚到成功，再补清理 class。 */
+  async function _tryRealLock(){
+    if (!(screen.orientation && screen.orientation.lock)) return false;
+    let state = null;      // true=已锁 false=被拒
+    const pr = screen.orientation.lock('landscape');
+    if (pr && pr.then) pr.then(() => { state = true; }, () => { state = false; });
+    else if (pr !== undefined) return true;
+    const t0 = Date.now();
+    while (state === null && Date.now() - t0 < 700){
+      await new Promise(r => setTimeout(r, 50));
+    }
+    if (state === true) return true;
+    if (state === null){
+      pr.then(() => {
+        if ((screen.orientation.type || '').indexOf('landscape') === 0){
+          _rotReal = true;
+          document.documentElement.classList.remove('rot90');
+          rotBtn.classList.add('active');
+          resize();
+        }
+      }).catch(() => {});
+    }
+    return false;
+  }
+  const _rotApply = async on => {
+    if (on){
+      _rotReal = await _tryRealLock();
+      document.documentElement.classList.toggle('rot90', !_rotReal);
+    } else {
+      if (_rotReal){
+        try{ screen.orientation.unlock(); }catch(e){}
+        _rotReal = false;
+      }
+      document.documentElement.classList.remove('rot90');
+    }
     rotBtn.classList.toggle('active', on);
     rotBtn.innerHTML = on ? '📱 竖屏' : '🔄 横屏';
     rotBtn.title = on ? '恢复竖屏' : '强制横屏（手机未开自动旋转也能横过来用）';
     resize();
+    if (on && _rotReal) setTimeout(resize, 350);   // 等系统旋转动画结束再重算
   };
   if (localStorage.getItem('pb_rot90') === '1') _rotApply(true);
   rotBtn.addEventListener('click', () => {
-    const on = !_isRot90();
+    const on = !(_rotReal || _isRot90());
     try { localStorage.setItem('pb_rot90', on ? '1' : '0'); } catch(e){}
     _rotApply(on);
     setStatus(on ? '🔄 已强制横屏（把手机横过来拿）' : '📱 已恢复竖屏');
