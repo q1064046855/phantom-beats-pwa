@@ -1,11 +1,11 @@
-/* PHANTOM BEATS Service Worker (v3.83)
+/* PHANTOM BEATS Service Worker (v3.84)
  * 策略：
  *   · index.html / app.js  = 网络优先，成功即更新缓存，断网回退缓存（刷新即最新，断网也能开）
  *   · 图标等静态资源       = 缓存优先
  *   · /api/ 动态接口与跨域请求 = 一律直连，不缓存（在线曲库、云端识别等）
  * 注：Service Worker 仅在 HTTPS / localhost 生效；局域网 http://IP 访问时浏览器
  *     会拒绝注册，页面自动跳过，一切功能不受影响。 */
-const CACHE = 'pb-v3.83';
+const CACHE = 'pb-v3.84';
 const SHELL = ['./', './index.html', './app.js', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
