@@ -10,12 +10,19 @@
 <!-- 状态栏透明、页面铺满（刘海区由 CSS env(safe-area-inset-*) 避让，样式里已用） -->
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <!-- 桌面图标下显示的名称 -->
-<meta name="apple-mobile-web-app-title" content="幻彩律动">
+<meta name="apple-mobile-web-app-title" content="PHANTOM BEATS">
 <title>幻彩律动 · PHANTOM BEATS</title>
+<!-- v3.83 PWA：图标/名称/全屏 + Service Worker（HTTPS 或 localhost 下生效，局域网 http 自动跳过） -->
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#0b0716">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{width:100%;height:100%;overflow:hidden;background:#000;color:#fff;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;-webkit-user-select:none;user-select:none}
   canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;touch-action:none}
+  /* v3.81 手势按钮覆盖层：拖歌词时「锁定/编辑/解锁」按钮画在这里，压在设置/播放器面板之上 */
+  #lockOverlay{position:fixed;inset:0;z-index:45;pointer-events:none;display:none}
 
   #ui{
     position:fixed;top:calc(20px + env(safe-area-inset-top, 0px));right:calc(20px + env(safe-area-inset-right, 0px));
@@ -217,13 +224,149 @@
   #settingsPanel .row + .row{border-top:1px dashed rgba(255,255,255,.08)}
   #settingsPanel .lab{font-size:11px;color:rgba(255,255,255,.55);letter-spacing:.1em;min-width:72px}
 
-  #fileInput{display:none}
+  /* v3.50 音乐播放器：居中半透明玻璃面板 + 参考样式控制条 */
+  #folderInput{display:none}
+  #playerPanel{
+    position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    z-index:40;display:none;flex-direction:column;
+    width:min(430px,92vw);max-height:84vh;
+    background:rgba(28,24,52,.42);border:1px solid rgba(255,255,255,.16);border-radius:20px;
+    backdrop-filter:blur(22px) saturate(170%);-webkit-backdrop-filter:blur(22px) saturate(170%);
+    box-shadow:0 24px 80px rgba(0,0,0,.55),0 0 60px rgba(139,92,246,.12);overflow:hidden;
+  }
+  #playerPanel.show{display:flex}
+  .pl-head{display:flex;align-items:center;gap:8px;padding:13px 17px;background:rgba(20,16,40,.28);border-bottom:1px solid rgba(255,255,255,.1);font-size:14px;color:#e6e2ff}
+  .pl-head .pl-title{flex:1;font-weight:600;letter-spacing:.04em}
+  /* v3.51 标签栏：文件夹+/所有歌曲/最近播放/我喜欢的 */
+  .pl-tabs{display:flex;gap:6px;padding:8px 12px;background:rgba(18,14,38,.24);border-bottom:1px solid rgba(255,255,255,.09);overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .pl-tab{
+    flex:1;min-width:fit-content;padding:6px 10px;border-radius:9px;cursor:pointer;white-space:nowrap;
+    border:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.05);
+    font-size:12px;color:rgba(255,255,255,.72);
+    transition:all .14s ease;
+  }
+  .pl-tab:hover{background:rgba(255,255,255,.11);color:#fff}
+  .pl-tab.active{background:rgba(139,92,246,.3);border-color:rgba(167,139,250,.55);color:#fff;font-weight:600}
+  .pl-tab-add{color:#cbb8ff}
+  .pl-tab-add:hover{color:#fff}
+  .pl-list{flex:1;overflow-y:auto;padding:6px 0;-webkit-overflow-scrolling:touch;min-height:130px}
+  .pl-empty{padding:32px 18px;text-align:center;color:rgba(255,255,255,.45);font-size:12.5px;line-height:1.9}
+  .pl-item{display:flex;align-items:center;gap:9px;padding:10px 17px;font-size:13px;color:rgba(255,255,255,.85);cursor:pointer;border-left:3px solid transparent;white-space:nowrap}
+  .pl-item:hover{background:rgba(255,255,255,.07)}
+  .pl-item.active{background:rgba(160,130,255,.16);border-left-color:#b79bff;color:#fff}
+  .pl-item .pl-ic{width:14px;flex:none;color:#c4b0ff}
+  .pl-item .pl-name{flex:1;overflow:hidden;text-overflow:ellipsis}
+  /* v3.82 在线曲库 */
+  .pl-item .pl-size{font-size:11px;color:rgba(255,255,255,.38);flex:none}
+  .pl-item .pl-x{flex:none;border:none;background:transparent;color:rgba(255,255,255,.32);font-size:13px;cursor:pointer;padding:2px 7px;border-radius:6px;line-height:1;font-family:inherit}
+  .pl-item .pl-x:hover{background:rgba(214,69,99,.28);color:#ff8fa8}
+  .pl-item .pl-ic.online{color:#7ecbff}
+  /* v3.79 勾选删除 */
+  .pl-chk{appearance:none;-webkit-appearance:none;width:15px;height:15px;flex:none;margin:0;border:1.5px solid rgba(255,255,255,.45);border-radius:3px;background:rgba(0,0,0,.25);cursor:pointer;position:relative;transition:all .12s ease;box-sizing:border-box}
+  .pl-chk:hover{border-color:#c4b0ff}
+  .pl-chk:checked{background:#8b5cf6;border-color:#b79bff}
+  .pl-chk:checked::after{content:'';position:absolute;left:4px;top:1px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+  .pl-item.picked{background:rgba(139,92,246,.14)}
+  .pl-item.picked.active{background:rgba(160,130,255,.26)}
+  /* v3.80 勾选保护区：框周围整列空白点击只切换勾选，不触发播放 */
+  .pl-chkzone{flex:none;display:flex;align-items:center;padding:10px 9px 10px 17px;margin:-10px 0 -10px -17px;cursor:pointer;user-select:none}
+  #plDel{display:none;padding:5px 12px;font-size:12.5px;background:rgba(214,69,99,.82);border-color:rgba(255,120,150,.6);color:#fff}
+  #plDel:hover{background:rgba(230,82,112,.95)}
+
+  /* 控制条：参考样式 随机/上一首/大播放键/下一首 */
+  .pl-ctrl{padding:13px 17px 16px;border-top:1px solid rgba(255,255,255,.1);background:rgba(18,14,38,.3)}
+  .pl-cc{display:flex;align-items:center;gap:16px;justify-content:center;margin-bottom:12px}
+  .pl-cc .pl-ic-btn{
+    width:42px;height:42px;border-radius:50%;border:none;background:transparent;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;font-size:19px;color:rgba(255,255,255,.92);padding:0;
+    transition:transform .12s ease,color .12s ease,background .12s ease;
+  }
+  .pl-cc .pl-ic-btn:hover{background:rgba(255,255,255,.1);transform:scale(1.08)}
+  .pl-cc .pl-ic-btn:active{transform:scale(.92)}
+  /* 模式键（顺序 🔁 / 随机 🔀）两态，随机时金色高亮 */
+  #ppMode{font-size:18px}
+  #ppMode.on{color:#ffcf8f;text-shadow:0 0 14px rgba(255,190,90,.7)}
+  /* 心形：同一字形两层叠加 → 喜欢时只是"填满"，位置大小完全不变；
+     底层=白色描边空心，上层=粉红实心，喜欢时上层淡入+粉红泛光 */
+  #ppLike{position:relative;font-size:22px}
+  #ppLike span{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;line-height:1;
+  }
+  #ppLike .h-out{color:transparent;-webkit-text-stroke:1.6px rgba(255,255,255,.85)}
+  #ppLike .h-in{color:#ff4f8b;opacity:0;text-shadow:0 0 9px rgba(255,79,139,.9),0 0 18px rgba(255,79,139,.5)}
+  #ppLike.liked .h-in{opacity:1;transition:opacity .12s ease}
+  #ppLike .h-in{transition:opacity .12s ease}
+  /* 中央大播放键：炫彩渐变胶囊（参考图的绿色大键换成与主题一致的炫彩） */
+  #ppPlay{
+    width:76px;height:52px;border-radius:999px;border:none;cursor:pointer;
+    font-size:20px;color:#fff;padding:0;
+    background:linear-gradient(135deg,#22d3ee,#8b5cf6 48%,#ec4899);
+    background-size:180% 180%;
+    box-shadow:0 6px 22px rgba(139,92,246,.5),0 0 18px rgba(236,72,153,.35),0 1px 2px rgba(0,0,0,.3);
+    animation:ppBgShift 5s ease infinite;
+    display:flex;align-items:center;justify-content:center;
+    transition:transform .12s ease;
+  }
+  @keyframes ppBgShift{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+  #ppPlay:hover{transform:scale(1.07)}
+  #ppPlay:active{transform:scale(.93)}
+
+  .pl-seek{display:flex;align-items:center;gap:10px;font-size:11px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
+  #ppSeek{flex:1;touch-action:manipulation;accent-color:#a78bfa}
+
+  /* ============ 左下角音符按钮 ============ */
+  /* 常态：半透明、静止、不发光 */
+  #playerBtn{
+    --b:0;
+    position:fixed;z-index:35;left:calc(22px + env(safe-area-inset-left,0px));bottom:calc(22px + env(safe-area-inset-bottom,0px));
+    width:70px;height:70px;border-radius:50%;border:1px solid rgba(255,255,255,.18);cursor:pointer;
+    display:flex;align-items:center;justify-content:center;padding:0;color:#fff;line-height:1;
+    background:rgba(124,58,237,.42);
+    backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+    box-shadow:0 4px 18px rgba(60,30,120,.25),0 0 0 1px rgba(255,255,255,.06) inset;
+    transform:scale(1);
+    transition:transform .12s ease-out,background .3s ease,box-shadow .3s ease;
+  }
+  #playerBtn .pb-note{font-size:31px;display:block;transform:none;filter:none}
+  #playerBtn:hover{background:rgba(139,92,246,.55)}
+  #playerBtn:active{transform:scale(.94) !important}
+  /* 面板打开态：稍亮一点 */
+  #playerBtn.active{background:rgba(139,92,246,.55);border-color:rgba(255,255,255,.28)}
+
+  /* 播放态：音符缓缓旋转 + 五颜六色炫彩发光；按钮随低频律动震动（--b 由 JS 实时更新） */
+  #playerBtn.playing{
+    background:rgba(139,92,246,.5);
+    transform:scale(calc(1 + var(--b) * .14));
+    animation:pbVibe .42s ease-in-out infinite alternate;
+    border-color:rgba(255,255,255,.3);
+  }
+  /* 外圈旋转的炫彩光环（conic 渐变旋转 + 色相流动） */
+  #playerBtn.playing::before{
+    content:'';position:absolute;inset:-6px;border-radius:50%;z-index:-1;
+    background:conic-gradient(from 0deg,#22d3ee,#8b5cf6,#ec4899,#f59e0b,#22d3ee);
+    animation:pbSpin 3.2s linear infinite;
+    filter:blur(6px);opacity:.85;
+  }
+  #playerBtn.playing::after{
+    content:'';position:absolute;inset:0;border-radius:50%;z-index:-1;
+    box-shadow:0 0 22px rgba(139,92,246,.65),0 0 40px rgba(236,72,153,.4),0 0 60px rgba(34,211,238,.3);
+    animation:pbHue 3.5s linear infinite;
+  }
+  #playerBtn.playing .pb-note{
+    animation:pbSpin 4.5s linear infinite;
+    filter:drop-shadow(0 0 8px rgba(255,255,255,.75)) drop-shadow(0 0 14px rgba(236,72,153,.6));
+  }
+  @keyframes pbSpin{to{transform:rotate(360deg)}}
+  @keyframes pbHue{to{filter:hue-rotate(360deg)}}
+  /* 律动"缓缓震动"：非常小的旋转摆动，与 scale 律动叠加 */
+  @keyframes pbVibe{from{rotate:-1.6deg}to{rotate:1.6deg}}
 
   #showBtn{
     position:fixed;top:calc(20px + env(safe-area-inset-top, 0px));right:calc(20px + env(safe-area-inset-right, 0px));z-index:11;
     display:none;
   }
   #showBtn.show{display:block;}
+
 
   /* 右侧歌词全列表面板 */
   #lyricsAllPanel{
@@ -344,6 +487,12 @@
       }
     }
 
+    /* v3.50 播放器保持居中弹层；矮横屏收窄边距，避免列表太挤 */
+    @media (orientation:landscape) and (max-height:500px){
+      #playerPanel{max-height:92vh}
+      .pl-list{min-height:60px}
+    }
+
     /* 歌词全列表面板：全宽、上半屏 */
     #lyricsAllPanel{
       top:10px; left:10px; right:10px; bottom:auto;
@@ -363,10 +512,158 @@
   @media (pointer: coarse){
     .btn:hover{ background:rgba(255,255,255,.06); }
   }
+  /* v3.70：v3.52 横向锁定时间轴编辑器 CSS 已随元素一并移除（.le-* / #lockEditor） */
+
+  /* ============ v3.53 全屏竖向锁定编辑页 ============ */
+  #lockVEdit{
+    position:fixed;inset:0;z-index:70;display:none;color:#fff;
+    pointer-events:none;   /* v3.59：容器不挡事件，面板/滚动区各自接收 */
+  }
+  #lockVEdit.show{display:flex}
+  /* v3.59：编辑面板只占左侧一条——横屏 1/3、竖屏 1/2，右侧留空给滚动区 */
+  .lv-panel{
+    display:flex;flex-direction:column;height:100%;
+    width:33.3333vw;min-width:260px;max-width:420px;pointer-events:auto;
+    background:rgba(4,6,14,.93);backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);
+    padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(12px + env(safe-area-inset-bottom,0px));
+    border-right:1px solid rgba(255,255,255,.12);
+    box-shadow:8px 0 32px rgba(0,0,0,.45);
+    position:relative;   /* v3.64：让内部的滚动条 absolute 定位在面板右缘 */
+  }
+  @media (orientation:portrait){ .lv-panel{width:42vw;min-width:0;max-width:300px} }
+  .lv-scrollzone{flex:1;pointer-events:auto;touch-action:none}
+  /* v3.63：编辑页最右边网页式滚动条 */
+  .lv-scrollbar{
+    position:absolute;top:0;bottom:0;right:0;width:14px;pointer-events:auto;
+    background:rgba(255,255,255,.05);border-left:1px solid rgba(255,255,255,.08);
+  }
+  .lv-sb-thumb{
+    position:absolute;left:2px;right:2px;top:0;min-height:24px;border-radius:6px;
+    background:rgba(126,200,255,.38);cursor:grab;touch-action:none;
+  }
+  .lv-sb-thumb:hover{background:rgba(126,200,255,.62)}
+  .lv-top{display:flex;align-items:center;gap:6px;margin-bottom:9px;flex-wrap:nowrap}
+  .lv-top .lv-btn{white-space:nowrap;flex-shrink:0}
+  .lv-title{
+    font-size:15px;font-weight:700;white-space:nowrap;flex:0 1 auto;min-width:38px;
+    overflow:hidden;text-overflow:ellipsis;
+  }
+  /* v3.69：右上角按钮组（跟随/−/＋/✕），永不换行 */
+  .lv-topbtns{margin-left:auto;flex:none;display:flex;align-items:center;gap:5px}
+  .lv-btn.lv-ico{padding:6px 0;min-width:34px;text-align:center}
+  .lv-close-x:hover{background:rgba(251,113,133,.28);border-color:rgba(251,113,133,.6);color:#fecdd3}
+  @media (max-width:680px){
+    .lv-topbtns{gap:4px}
+    .lv-topbtns .lv-btn{font-size:11.5px}
+    .lv-btn.lv-ico{min-width:30px}
+    .follow-txt{display:none}   /* 窄屏跟随钮只留图标，保证一排放得下 */
+  }
+  .lv-btn{
+    padding:6px 12px;border-radius:9px;border:1px solid rgba(255,255,255,.16);
+    background:rgba(255,255,255,.06);color:rgba(255,255,255,.85);font-size:12.5px;cursor:pointer;
+  }
+  .lv-btn:hover{background:rgba(255,255,255,.13);color:#fff}
+  .lv-follow.on{background:rgba(34,211,238,.22);border-color:rgba(34,211,238,.5);color:#a5f3fc}
+  .lv-track{
+    position:relative;flex:1;border-radius:12px;overflow:hidden;touch-action:none;
+    background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);
+  }
+  /* v3.60：轨道右侧空白条 = 上下拖动滚动区（淡虚线提示），刻度线/播放头不挡事件 */
+  .lv-track::after{
+    content:'';position:absolute;top:8px;bottom:8px;right:17px;width:0;
+    border-left:2px dashed rgba(255,255,255,.15);pointer-events:none;z-index:0;
+  }
+  .lv-ruler{position:absolute;inset:0}
+  .lv-tick{position:absolute;left:0;right:0;height:1px;background:rgba(255,255,255,.09);pointer-events:none}
+  .lv-tick.major{background:rgba(255,255,255,.22)}
+  .lv-tick-lbl{
+    position:absolute;left:8px;font-size:10px;color:rgba(255,255,255,.45);
+    transform:translateY(-50%);font-variant-numeric:tabular-nums;pointer-events:none;
+  }
+  .lv-playhead{
+    position:absolute;left:0;right:0;height:2px;background:#67e8f9;z-index:6;
+    box-shadow:0 0 10px rgba(103,232,249,.9);pointer-events:none;
+  }
+  .lv-playhead::before{content:'';position:absolute;left:0;top:-4px;width:5px;height:10px;border-radius:2px;background:#67e8f9}
+  .lv-seg{
+    position:absolute;left:58px;right:44px;border-radius:9px;z-index:5;min-height:16px;
+    background:linear-gradient(160deg,rgba(139,92,246,.55),rgba(236,72,153,.45));
+    border:1px solid rgba(216,180,254,.6);box-shadow:0 0 14px rgba(167,139,250,.3);
+    cursor:default;   /* v3.67：未选中时拖动=滑动预览，无需 grab 提示 */
+  }
+  .lv-seg.sel{cursor:grab}   /* v3.67：选中后拖空白=移整篇 */
+  .lv-seg.grabbing{cursor:grabbing}
+  /* v3.64：点选块高亮（白色描边） */
+  .lv-seg.sel{
+    border-color:#fff;box-shadow:0 0 20px rgba(255,255,255,.55);
+  }
+  .lv-seg-name{
+    position:absolute;top:3px;left:12px;right:30px;font-size:11px;color:rgba(255,255,255,.92);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;z-index:1;
+    text-shadow:0 1px 3px rgba(0,0,0,.55);
+  }
+  .lv-times{
+    position:absolute;right:24px;top:4px;font-size:9.5px;color:rgba(255,255,255,.8);
+    pointer-events:none;font-variant-numeric:tabular-nums;text-shadow:0 1px 3px rgba(0,0,0,.6);
+  }
+  /* v3.55：块内逐句展开歌词（v3.57 文字加大） */
+  .lv-lines{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:1}
+  .lv-line{
+    position:absolute;left:8px;right:6px;min-height:18px;display:flex;align-items:center;gap:5px;
+    transform:translateY(-50%);pointer-events:auto;padding:0 5px;border-radius:5px;
+    cursor:inherit;   /* v3.65：继承块的 grab，不再是文本光标 */
+  }
+  .lv-line:active{background:transparent}   /* v3.68：未选中滑动预览时按住词句不高亮 */
+  .lv-line-t{
+    font-size:10px;color:rgba(255,255,255,.7);flex:none;
+    font-variant-numeric:tabular-nums;text-shadow:0 1px 2px rgba(0,0,0,.6);
+  }
+  .lv-line-x{
+    font-size:13px;color:#fff;overflow:hidden;
+    text-shadow:0 1px 3px rgba(0,0,0,.65);
+    /* v3.61：超宽歌词允许折两行，行高自适应 */
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+    white-space:normal;word-break:break-all;line-height:1.25;
+  }
+  /* v3.67：选中块的行 = 就地可编辑胶囊（详细编辑功能从独立面板搬入块内） */
+  .lv-lines.ovf{overflow:visible}   /* 拖词时允许 ghost 超出块边缘 */
+  .lv-line.ed{
+    left:10px;right:10px;gap:6px;padding:2px 6px 2px 10px;
+    background:rgba(139,92,246,.24);border:1px solid rgba(167,139,250,.55);
+    border-radius:999px;cursor:grab;touch-action:none;
+  }
+  .lv-line.ed .lv-line-t{min-width:30px}
+  .lv-line.ed.dragging{
+    border-color:#fff;background:rgba(139,92,246,.45);cursor:grabbing;z-index:4;
+  }
+  .lv-line-inp{
+    flex:1;min-width:0;background:transparent;border:0;outline:none;padding:2px 0;
+    color:#fff;font-size:12.5px;font-family:inherit;cursor:text;
+  }
+  .lv-line-del{
+    flex:none;width:17px;height:17px;border-radius:50%;padding:0;line-height:1;
+    background:rgba(251,113,133,.75);border:1px solid rgba(255,255,255,.55);
+    color:#fff;font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  }
+  /* v3.76：拉杆手柄完全收进块内（不再伸出 6px）——两篇相贴时手柄不再互相重叠/
+     抢点击，间隙可以真正合到 0 */
+  .lv-edge{position:absolute;left:0;right:0;height:12px;z-index:3}
+  .lv-edge.t{top:0;cursor:ns-resize}
+  .lv-edge.b{bottom:0;cursor:ns-resize}
+  .lv-edge::after{content:'';position:absolute;left:50%;bottom:3px;width:12px;height:3px;margin-left:-6px;border-radius:2px;background:rgba(255,255,255,.8)}
+  .lv-edge.t::after{bottom:auto;top:3px}
+  .lv-del{
+    position:absolute;right:-8px;top:-8px;width:18px;height:18px;border-radius:50%;
+    background:#fb7185;border:1px solid rgba(255,255,255,.7);color:#fff;font-size:10px;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:8;line-height:1;padding:0;
+  }
+  .lv-tip{font-size:11px;color:rgba(255,255,255,.42);margin-top:8px;line-height:1.5}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<canvas id="lockOverlay"></canvas>
 
 <div id="status"></div>
 
@@ -396,6 +693,7 @@
     </span>
     <button class="btn" id="searchBtn">🔍 搜索</button>
     <button class="btn" id="matchVersionBtn" style="display:none" title="歌词不对？点一下换版本；只有一个版本时按歌名重新搜索更多版本">🎯 歌词版本更换</button>
+    <button class="btn" id="lockLyricsBtn" style="display:none" title="把当前歌词锁定到这个播放位置；下次播到此处自动加载，且不再自动识别（可在设置里拖动调整起止时间）">&#x1F512; 锁定歌词</button>
   </div>
   <!-- 右上角竖排：①缩小 ②全屏 ③识别歌曲 ④设置 -->
   <div class="row" id="sideBtnRow">
@@ -405,6 +703,9 @@
     <button class="btn" id="settingsBtn" title="打开设置：音源/配色/歌词开关/自动跟随等">⚙ 设置</button>
   </div>
 </div>
+
+<!-- 左下角独立音符按钮（点击呼出/隐藏播放器；播放时旋转发光随律动） -->
+<button id="playerBtn" title="音乐播放器：选择文件夹放歌，波形自动跟随播放器声音"><span class="pb-note">&#x266A;&#xFE0E;</span></button>
 
 <button id="showBtn" class="btn">⚙ 控制台</button>
 
@@ -419,11 +720,8 @@
     <span class="lab">音源 SOURCE</span>
     <div class="seg" id="sourceSeg">
       <button class="seg-btn active" data-source="system">系统音频</button>
-      <button class="seg-btn" data-source="file">本地音乐</button>
       <button class="seg-btn" data-source="mic">麦克风</button>
-      <button class="seg-btn" data-source="demo">演示</button>
     </div>
-    <input type="file" id="fileInput" accept="audio/*">
   </div>
 
   <div class="row">
@@ -434,6 +732,12 @@
   <div class="row">
     <span class="lab">歌词版本</span>
     <select id="versionSelect" style="display:none;max-width:220px" title="自行选择歌词版本"></select>
+  </div>
+
+  <!-- v3.70：原设置区横向小编辑器已移除，只保留这一个入口（放在歌词版本下方） -->
+  <div class="row">
+    <span class="lab">歌词编辑</span>
+    <button class="btn" id="leDetail" title="进入歌词详细编辑：选中篇后可改词句文字、上下拖动词句调整时间">&#x1F4CB; 歌词详细编辑</button>
   </div>
 
   <div class="row">
@@ -479,6 +783,70 @@
     <span class="lab">线宽</span>
     <input type="range" id="lw" min="0.5" max="4" step="0.1" value="1.6">
     <span class="v" id="lwV">1.60</span>
+  </div>
+
+  <!-- v3.70：横向小编辑器（#lockEditor）已移除，详细编辑入口见上方「歌词版本」下按钮 -->
+</div>
+
+<!-- ============ v3.53 全屏竖向锁定编辑页（画布拖拽手势 → ✎ 编辑范围） ============ -->
+<div id="lockVEdit">
+  <div class="lv-panel">
+  <div class="lv-top">
+    <span class="lv-title">&#x1F512; 锁定区域编辑</span>
+    <!-- v3.69：右上角一排：跟随 · 缩小 · 放大 · ✕关闭（已取消「新建」与「完成」） -->
+    <div class="lv-topbtns">
+      <button class="lv-btn lv-follow on" id="lvFollow" title="时间轴跟随当前播放位置">&#x25C9;<span class="follow-txt">&#x3000;跟随</span></button>
+      <button class="lv-btn lv-ico" id="lvZoomOut" title="缩小时间轴">&#x2212;</button>
+      <button class="lv-btn lv-ico" id="lvZoomIn" title="放大时间轴（精确拖动）">&#xFF0B;</button>
+      <button class="lv-btn lv-ico lv-close-x" id="lvDone" title="关闭编辑页">&#x2715;</button>
+    </div>
+  </div>
+  <div class="lv-track" id="lvTrack">
+    <div class="lv-ruler" id="lvRuler"></div>
+    <div class="lv-playhead" id="lvPlayhead"></div>
+  </div>
+  <div class="lv-tip">点块一次=选中（未选中时拖动=滑动预览）· 选中后：点词改字、上下拖词改时间、拖块空白移整篇 · 拖块上下边缘调起止 · &#x2715; 删除</div>
+  <!-- v3.64：滚动条移到面板内侧右缘（不再贴屏幕最右端） -->
+  <div class="lv-scrollbar" id="lvScrollbar"><div class="lv-sb-thumb" id="lvSbThumb"></div></div>
+  </div>
+  <!-- v3.59：右侧留空区域，上下拖动 = 滚动时间轴（方便边看边浏览歌曲位置） -->
+  <div class="lv-scrollzone" id="lvScrollZone"></div>
+</div>
+
+<!-- ============ v3.48 音乐播放器（播放时波形自动跟随播放器声音） ============ -->
+<input type="file" id="folderInput" webkitdirectory multiple>
+<input type="file" id="onlineInput" accept="audio/*,.mp3,.flac,.m4a,.wav,.ogg,.aac,.wma,.opus" multiple>
+<audio id="playerAudio" preload="metadata"></audio>
+<div id="playerPanel">
+  <div class="pl-head">
+    <span class="pl-title">&#x1F3B5; 播放器</span>
+    <button class="btn" id="plUp" style="display:none">&#x2B06;&#xFE0F; 上传</button>
+    <button class="btn" id="plDel">&#x1F5D1;&#xFE0F; 删除</button>
+    <button class="btn" id="plClose" style="padding:4px 11px">&#x2715;</button>
+  </div>
+  <div class="pl-tabs">
+    <button class="pl-tab pl-tab-add" id="plAdd" title="选择存放音乐的文件夹（自动添加里面所有音乐）">&#xFF0B; 添加本地歌曲</button>
+    <button class="pl-tab active" data-tab="all">所有歌曲</button>
+    <button class="pl-tab" data-tab="recent">最近播放</button>
+    <button class="pl-tab" data-tab="liked">我喜欢的</button>
+    <button class="pl-tab" data-tab="online">&#x2601;&#xFE0F; 在线曲库</button>
+  </div>
+  <div class="pl-list" id="plList">
+    <div class="pl-empty">还没有歌曲<br>点击上方「＋ 添加本地歌曲」<br>选择存放音乐的文件夹即可</div>
+  </div>
+  <div class="pl-ctrl">
+    <div class="pl-cc">
+      <button class="pl-ic-btn" id="ppMode" title="播放模式：顺序循环（点一下切换为随机播放）">&#x1F501;&#xFE0E;</button>
+      <button class="pl-ic-btn" id="ppPrev" title="上一首">&#x23EE;&#xFE0E;</button>
+      <button id="ppPlay" title="播放 / 暂停">&#x25B6;&#xFE0E;</button>
+      <button class="pl-ic-btn" id="ppNext" title="下一首">&#x23ED;&#xFE0E;</button>
+      <button class="pl-ic-btn" id="ppLike" title="加入我喜欢的"><span class="h-out">&#x2665;</span><span class="h-in">&#x2665;</span></button>
+    </div>
+    <div class="pl-seek">
+      <span id="ppCur">0:00</span>
+      <input type="range" id="ppSeek" min="0" max="1000" value="0">
+      <span id="ppDur">0:00</span>
+    </div>
   </div>
 </div>
 
