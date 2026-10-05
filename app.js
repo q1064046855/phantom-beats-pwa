@@ -10,7 +10,7 @@
    ============================================================ */
 
 const FFT_BINS = 64;
-const VERSION = 'v3.89';
+const VERSION = 'v3.90';
 
 /* v3.83 PWA：注册 Service Worker（添加到主屏幕 = 手机 App 体验）。
  * 仅 HTTPS / localhost 下浏览器允许注册；局域网 http://IP 访问自动跳过，功能不受影响。 */
@@ -397,9 +397,12 @@ function drawBgStars(now){
 }
 
 /* ---------- Resize ---------- */
+/* v3.90 强制横屏（html.rot90）：body 旋转 90° 后，画布宽度=视口高、高度=视口宽 */
+function _isRot90(){ return document.documentElement.classList.contains('rot90'); }
 function resize(){
   DPR = window.devicePixelRatio || 1;
-  W = window.innerWidth; H = window.innerHeight;
+  if (_isRot90()){ W = window.innerHeight; H = window.innerWidth; }
+  else { W = window.innerWidth; H = window.innerHeight; }
   canvas.width  = W * DPR;
   canvas.height = H * DPR;
   canvas.style.width  = W + 'px';
@@ -418,6 +421,23 @@ window.addEventListener('resize', resize);
 // v3.41 移动端：旋转屏后等系统布局稳定再重算
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 resize();
+
+/* v3.90 强制横屏坐标换算：
+   body 被 translateX(100vw)+rotate(90°) 后，视口点(clientX,clientY) 对应
+   body 内画布点 (clientY, innerWidth - clientX)。所有画布/编辑页手势
+   先经 _rotXY 转到 body 坐标系，内部逻辑零改动。 */
+function _rotXY(e){
+  if (!_isRot90()) return e;
+  return { clientX: e.clientY, clientY: window.innerWidth - e.clientX };
+}
+/* getBoundingClientRect 返回的是旋转后的视口 AABB；转回 body 空间矩形
+   （宽高互换、原点映射），供编辑页用 rect 做的比例换算继续成立。 */
+function _rotRect(r){
+  if (!_isRot90()) return r;
+  const left = r.top, top = window.innerWidth - r.right;
+  return { left, top, width: r.height, height: r.width,
+           right: left + r.height, bottom: top + r.width };
+}
 
 /* ============================================================
    形态渲染器：镜像波形 · 三频律动 (第一版还原 + 星空/自动配色)
@@ -1274,10 +1294,24 @@ const playerAudio = document.getElementById('playerAudio');
 /* v3.84 云端 COS 音频必须带 CORS 凭据才能进 WebAudio（否则静音 taint）；
  * blob:/同源不受影响；COS 桶已配 CORS AllowOrigin * */
 playerAudio.crossOrigin = 'anonymous';
+/* ============================================================
+   v3.90 后台播放（波形/出声分离）：
+   playerAudio 彻底退出 WebAudio，原生直出扬声器 —— iOS 切后台/锁屏时
+   系统只挂起 AudioContext，不再波及播放器出声，后台/锁屏持续放歌。
+   波形改由影子 <audio>（fxAudio，同一音源）→ MediaElementSource →
+   analyser 提供；analyser 不连 destination（纯分析，无双重声音）。
+   前台：fxAudio 跟随播放供波形；切后台：fxAudio.pause()（波形停，声音不停）；
+   回前台/每 5 秒：漂移 >0.35s 自动校正对齐。
+   v3.89 的 iOS 暂停循环 bug（MediaElementSource 暂停残留）随出声链路
+   退出 WebAudio 而根除——扬声器路径不再经过 WebAudio。
+   ============================================================ */
+const fxAudio = new Audio();
+fxAudio.crossOrigin = 'anonymous';
+fxAudio.preload = 'auto';
+let _fxNode = null;         // fxAudio 的 MediaElementSourceNode（每元素仅能创建一次）
 const plListEl = document.getElementById('plList');
 let _plItems = [];          // {name, file, url}
 let _plIdx = -1;
-let _plNode = null;         // MediaElementAudioSourceNode（每个元素只能创建一次）
 let _plSwitching = false;   // 切歌中：忽略本次 pause 事件
 let _plManualPause = false; // 用户主动点了暂停
 let _plAutoResume = false;  // v3.88 来电/微信语音打断后待自动恢复
@@ -1349,27 +1383,58 @@ function _plView(){
   return _plItems.map((it, idx) => ({it, idx}));
 }
 
+/* v3.90 影子分析链路：fxAudio → _fxNode → analyser（终点）。
+   analyser 不再连 destination——出声完全由 playerAudio 原生直出，
+   影子只喂波形分析（与麦克风模式的 sourceNode→analyser 同构，实测可行）。
+   幂等重连：每次先断再接（MediaElementSource 支持重复 connect/disconnect）。 */
 function _plEnsureGraph(){
   ensureAudioCtx();
-  if (!_plNode){
-    _plNode = audioCtx.createMediaElementSource(playerAudio);
+  if (!_fxNode){
+    _fxNode = audioCtx.createMediaElementSource(fxAudio);
   }
-  /* v3.89 幂等重连：_plMuteChain 断过的链路在这里全部接回
-     （每次先断再接，MediaElementSource 支持重复 connect/disconnect） */
-  try{ _plNode.disconnect(); }catch(e){}
-  _plNode.connect(analyser);
-  try{ analyser.disconnect(); }catch(e){}
-  analyser.connect(audioCtx.destination);
+  try{ _fxNode.disconnect(); }catch(e){}
+  _fxNode.connect(analyser);
+  try{ analyser.disconnect(); }catch(e){}   // analyser 终点化：绝不回连扬声器（防双重出声）
 }
-/* v3.89 iOS 修复：暂停时彻底断开播放器→扬声器链路。
-   iOS WebKit 缺陷：audio 元素经 createMediaElementSource 接入 WebAudio 后，
-   pause() 偶发不真正停渲染，MediaElementSourceNode 持续重复输出暂停瞬间的
-   最后一段缓冲区（几毫秒声音无限循环，播放/暂停均无法解除，只能关页面）。
-   断链后即使内部仍在循环也到不了扬声器；恢复播放时 _plEnsureGraph 幂等接回。 */
+/* v3.90 暂停静音：影子同步暂停 + 断链。
+   （v3.89 的断链止血语义保留在分析端；扬声器端已不经过 WebAudio，
+   iOS MediaElementSource 暂停残留 bug 不再影响出声。） */
 function _plMuteChain(){
-  try{ if (_plNode) _plNode.disconnect(); }catch(e){}
+  try{ if (_fxNode) _fxNode.disconnect(); }catch(e){}
   try{ if (analyser) analyser.disconnect(); }catch(e){}
+  try{ if (fxAudio) fxAudio.pause(); }catch(e){}
 }
+
+/* v3.90 影子同步：让 fxAudio 跟随 playerAudio（换源/进度对齐/播放暂停）。
+   切后台（document.hidden）时影子暂停——声音交给原生 playerAudio 继续。 */
+function _fxSync(){
+  if (_plIdx < 0) return;
+  if (fxAudio.src !== playerAudio.src && playerAudio.src){
+    fxAudio.src = playerAudio.src;   // 换歌：影子换同一音源
+  }
+  if (document.hidden || playerAudio.paused){
+    try{ fxAudio.pause(); }catch(e){}
+    return;
+  }
+  if (audioCtx && audioCtx.state === 'suspended'){ try{ audioCtx.resume(); }catch(e){} }
+  const drift = Math.abs((fxAudio.currentTime || 0) - (playerAudio.currentTime || 0));
+  if (fxAudio.readyState >= 1 && (drift > 0.35 || fxAudio.paused)){
+    try{ fxAudio.currentTime = playerAudio.currentTime || 0; }catch(e){}
+  }
+  if (fxAudio.paused){
+    const pr = fxAudio.play();
+    if (pr && pr.catch) pr.catch(()=>{});   // 自动播放被拦：仅丢波形，声音不受影响
+  }
+}
+/* 影子漂移校正：每 5 秒对齐一次；回前台立即对齐 */
+setInterval(() => { if (!document.hidden && !playerAudio.paused && _plIdx >= 0) _fxSync(); }, 5000);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden){
+    try{ fxAudio.pause(); }catch(e){}        // 后台：波形停、声音不停
+  } else if (_plIdx >= 0 && !playerAudio.paused){
+    _fxSync();                                // 回前台：立即接上波形
+  }
+});
 
 function _plFmt(t){
   if (!isFinite(t)) return '0:00';
@@ -1783,7 +1848,7 @@ const PP_SVG_PAUSE = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidde
 function _plPause(){
   _plManualPause = true;
   playerAudio.pause();
-  _plMuteChain();   // v3.89 iOS 暂停循环残留：断开扬声器链路（恢复播放时幂等重连）
+  _plMuteChain();   // v3.90 影子暂停+断链（扬声器已不经 WebAudio，iOS 暂停残留不致出声）
   /* v3.88：暂停后音源保持「播放器」（按钮亮播放器、波形静止）；
      不再自动回系统音频——要听系统声音由用户显式点「系统音频」 */
   document.getElementById('ppPlay').innerHTML = PP_SVG_PLAY;
@@ -1799,7 +1864,8 @@ playerAudio.addEventListener('play', () => {
   if (micStream || _micNode || _micProc){
     stopAudio();
   }
-  _plEnsureGraph();   // v3.89 幂等重连（暂停时被 _plMuteChain 断开过）
+  _plEnsureGraph();   // v3.90 影子链路幂等重连（fxAudio→analyser）
+  _fxSync();          // v3.90 影子同步（换源/对齐/起播）
   state.source = 'player';
   _setSourceUI('player');   // v3.88 音源高亮跟随播放器
   document.getElementById('ppPlay').innerHTML = PP_SVG_PAUSE;
@@ -1817,6 +1883,7 @@ playerAudio.addEventListener('play', () => {
   _plSuppressSync(true);
 });
 playerAudio.addEventListener('pause', () => {
+  try{ fxAudio.pause(); }catch(e){}   // v3.90 影子同步暂停（切歌引起的 pause 由 _fxSync 兜底）
   if (_plSwitching) return;      // 换 src 切歌引起的 pause
   _plSuppressSync(true);         // v3.52：暂停 → 解除屏蔽窗口
   if (_plManualPause){ _plManualPause = false; return; }   // 用户手动暂停
@@ -1833,6 +1900,7 @@ playerAudio.addEventListener('ended', () => { _plNext(); });
 playerAudio.addEventListener('seeked', () => {
   _plReanchor();                 // v3.52：拖动进度后重锚
   _plSuppressSync(true);
+  _fxSync();                     // v3.90 影子进度对齐（拖进度条后影子跟着跳）
 });
 playerAudio.addEventListener('loadedmetadata', () => {
   document.getElementById('ppDur').textContent = _plFmt(playerAudio.duration);
@@ -2427,7 +2495,7 @@ function lvFrame(){
   if (lvFollow) lvWin = p - lvSpan * 0.35;
   if (lvWin < 0) lvWin = 0;
   if (lvWin + lvSpan > dur) lvWin = Math.max(0, dur - lvSpan);
-  const h = lvTrack.getBoundingClientRect().height || 1;
+  const h = _rotRect(lvTrack.getBoundingClientRect()).height || 1;
   const yOf = sec => (sec - lvWin) / lvSpan * h;
   // 竖向刻度：按当前缩放选 ≥56px 间距的步长
   const STEPS = [5,10,15,30,60,120,300,600,900,1800,3600,7200];
@@ -2576,12 +2644,12 @@ function lvWireLineGestures(el, seg, box, line, row, inp, t){
   row.addEventListener('pointerdown', e => {
     if (e.button != null && e.button !== 0) return;
     e.stopPropagation(); e.preventDefault();
-    pd = { y0:e.clientY, active:false, tOrig:line.time || 0 };
+    pd = { y0:_rotXY(e).clientY, active:false, tOrig:line.time || 0 };
     try { row.setPointerCapture(e.pointerId); } catch(err){}
   });
   row.addEventListener('pointermove', e => {
     if (!pd) return;
-    const dy = e.clientY - pd.y0;
+    const dy = _rotXY(e).clientY - pd.y0;
     if (!pd.active && Math.abs(dy) < 6) return;
     if (!pd.active){
       pd.active = true;
@@ -2592,7 +2660,7 @@ function lvWireLineGestures(el, seg, box, line, row, inp, t){
       pd.prev = i > 0 ? (order[i-1].time || 0) : 0;
       pd.next = i < order.length - 1 ? (order[i+1].time || 0) : Infinity;
     }
-    const hh = lvTrack.getBoundingClientRect().height || 1;
+    const hh = _rotRect(lvTrack.getBoundingClientRect()).height || 1;
     let nt = pd.tOrig + dy / hh * lvSpan;
     nt = Math.max(pd.prev + 0.05, Math.min(pd.next - 0.05, nt));
     line.time = Math.max(0, +nt.toFixed(2));
@@ -2674,9 +2742,9 @@ function lvLayoutLines(el, seg){
 function lvWireDrag(el, eT, eB, seg){
   const beginDrag = (mode, e) => {
     e.preventDefault(); e.stopPropagation();
-    const rect = lvTrack.getBoundingClientRect();
+    const rect = _rotRect(lvTrack.getBoundingClientRect());   // v3.90 body 空间矩形
     const target = e.currentTarget;
-    const d = { y0: e.clientY, start0: seg.start, end0: seg.end,
+    const d = { y0: _rotXY(e).clientY, start0: seg.start, end0: seg.end,
       off0: seg.alignOffsetSec || 0, moved: false,
       dur: _plDuration() || Infinity };
     // v3.74：拖拽不可侵入相邻篇——记录起止时间轴邻居边界
@@ -2686,7 +2754,7 @@ function lvWireDrag(el, eT, eB, seg){
     // v3.67：move 模式只会在「块已选中」时进入（行胶囊/边缘/✕ 均自行拦截）
     if (mode === 'move') el.classList.add('grabbing');
     const move = ev => {
-      const dySec = (ev.clientY - d.y0) / rect.height * lvSpan;
+      const dySec = (_rotXY(ev).clientY - d.y0) / rect.height * lvSpan;
       if (Math.abs(dySec) > 0.5) d.moved = true;   // v3.64：区分点击与拖动
       if (mode === 'move'){
         const len = d.end0 - d.start0;
@@ -2760,10 +2828,10 @@ function lvWireDrag(el, eT, eB, seg){
   el.onpointerdown = e => {
     if (seg === lvSegSel){ beginDrag('move', e); return; }
     e.preventDefault();
-    const g = { y0:e.clientY, win0:lvWin, pan:false };
-    const h0 = lvTrack.getBoundingClientRect().height || 1;
+    const g = { y0:_rotXY(e).clientY, win0:lvWin, pan:false };
+    const h0 = _rotRect(lvTrack.getBoundingClientRect()).height || 1;
     const mv = ev => {
-      const dy = ev.clientY - g.y0;
+      const dy = _rotXY(ev).clientY - g.y0;
       if (!g.pan && Math.abs(dy) < 6) return;
       if (!g.pan){
         g.pan = true;
@@ -2787,11 +2855,11 @@ lvTrack.addEventListener('pointerdown', e => {
   if (e.target !== lvTrack && e.target !== lvRuler) return;
   lvFollow = false;
   document.getElementById('lvFollow').classList.remove('on');
-  const y0 = e.clientY, win0 = lvWin;
+  const y0 = _rotXY(e).clientY, win0 = lvWin;
   let clickMoved = false;
   const move = ev => {
-    if (Math.abs(ev.clientY - y0) > 6) clickMoved = true;
-    lvWin = Math.max(0, win0 - (ev.clientY - y0) / lvTrack.getBoundingClientRect().height * lvSpan);
+    if (Math.abs(_rotXY(ev).clientY - y0) > 6) clickMoved = true;
+    lvWin = Math.max(0, win0 - (_rotXY(ev).clientY - y0) / _rotRect(lvTrack.getBoundingClientRect()).height * lvSpan);
   };
   const up = () => {
     try { lvTrack.releasePointerCapture(e.pointerId); }catch(err){}
@@ -2809,9 +2877,9 @@ document.getElementById('lvScrollZone').addEventListener('pointerdown', e => {
   lvFollow = false;
   document.getElementById('lvFollow').classList.remove('on');
   const zone = e.currentTarget;
-  const y0 = e.clientY, win0 = lvWin;
+  const y0 = _rotXY(e).clientY, win0 = lvWin;
   const move = ev => {
-    lvWin = Math.max(0, win0 - (ev.clientY - y0) / lvTrack.getBoundingClientRect().height * lvSpan);
+    lvWin = Math.max(0, win0 - (_rotXY(ev).clientY - y0) / _rotRect(lvTrack.getBoundingClientRect()).height * lvSpan);
   };
   const up = () => {
     try { zone.releasePointerCapture(e.pointerId); }catch(err){}
@@ -2831,10 +2899,10 @@ lvSbThumb.addEventListener('pointerdown', e => {
   const sh = lvSb.clientHeight || 1;
   const dur = _plDuration() || 600;
   const maxWin = Math.max(0.001, dur - lvSpan);
-  const thH = lvSbThumb.getBoundingClientRect().height;
-  const y0 = e.clientY, win0 = lvWin;
+  const thH = _rotRect(lvSbThumb.getBoundingClientRect()).height;
+  const y0 = _rotXY(e).clientY, win0 = lvWin;
   const move = ev => {
-    lvWin = Math.max(0, Math.min(maxWin, win0 + (ev.clientY - y0) / Math.max(1, sh - thH) * maxWin));
+    lvWin = Math.max(0, Math.min(maxWin, win0 + (_rotXY(ev).clientY - y0) / Math.max(1, sh - thH) * maxWin));
   };
   const up = () => {
     try { lvSbThumb.releasePointerCapture(e.pointerId); }catch(err){}
@@ -2849,10 +2917,10 @@ lvSb.addEventListener('pointerdown', e => {
   if (e.target !== lvSb) return;
   lvFollow = false;
   document.getElementById('lvFollow').classList.remove('on');
-  const r = lvSb.getBoundingClientRect();
+  const r = _rotRect(lvSb.getBoundingClientRect());
   const dur = _plDuration() || 600;
   const maxWin = Math.max(0, dur - lvSpan);
-  lvWin = Math.max(0, Math.min(maxWin, (e.clientY - r.top) / (r.height || 1) * dur - lvSpan / 2));
+  lvWin = Math.max(0, Math.min(maxWin, (_rotXY(e).clientY - r.top) / (r.height || 1) * dur - lvSpan / 2));
 });
 document.getElementById('lvZoomIn').onclick = () => { lvSpan = Math.max(10, lvSpan / 1.5); localStorage.setItem('lv_span', lvSpan); };
 document.getElementById('lvZoomOut').onclick = () => { lvSpan = Math.min(86400, lvSpan * 1.5); localStorage.setItem('lv_span', lvSpan); };
@@ -3098,9 +3166,163 @@ function applyServerMessage(e){
 }
 
 /* ============================================================
+ * v3.90 播放器本地文件识别：播放器模式下点「识别歌曲」不再开麦克风，
+ * 直接从本地音乐文件截取当前播放位置前 15 秒提交云端识别。
+ * 片段语义与麦克风录音完全一致（片段终点≈点击瞬间的播放位置），
+ * 服务端 ACR play_offset_ms 锚点公式无需任何改动。
+ *  - mp3/flac/wav(16bit)：字节级裁剪（零解码、省内存、瞬时完成）
+ *  - m4a/ogg 等容器格式：decodeAudioData 全解码 → 单声道 16bit WAV
+ *    （超长文件有内存上限，报错提示转 mp3）
+ * ============================================================ */
+function _plId3v2Size(u8){
+  if (u8.length < 10 || u8[0] !== 0x49 || u8[1] !== 0x44 || u8[2] !== 0x33) return 0;
+  const sz = ((u8[6]&0x7f)<<21)|((u8[7]&0x7f)<<14)|((u8[8]&0x7f)<<7)|(u8[9]&0x7f);
+  return 10 + sz + ((u8[5]&0x10) ? 10 : 0);   // 10字节头 + 标签体 + footer
+}
+/* 从 buf 头开始搜音频帧同步字（mp3: 0xFF+版本/层合法位；flac: 0xFFF8xx） */
+function _plFindSync(u8, isFlac){
+  const end = Math.min(u8.length - 4, 262144);
+  for (let i = 0; i < end; i++){
+    if (u8[i] !== 0xFF) continue;
+    const b1 = u8[i+1], b2 = u8[i+2];
+    if (isFlac){ if ((b1 & 0xFC) === 0xF8) return i; }
+    else if ((b1 & 0xE0) === 0xE0 && (b1 & 0x18) !== 0x08 && (b1 & 0x06) !== 0x00 &&
+             (b2 & 0xF0) !== 0xF0 && (b2 & 0x0C) !== 0x0C) return i;
+  }
+  return -1;
+}
+/* 16bit PCM 字节包上 WAV 头（支持单/双声道，采样率取自源文件） */
+function _plWrapWav(pcm, sr, ch){
+  const bytes = pcm.byteLength;
+  const buf = new ArrayBuffer(44 + bytes);
+  const dv = new DataView(buf);
+  const w = (o,s) => { for (let i=0;i<s.length;i++) dv.setUint8(o+i, s.charCodeAt(i)); };
+  w(0,'RIFF'); dv.setUint32(4, 36 + bytes, true);
+  w(8,'WAVEfmt '); dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true); dv.setUint16(22, ch, true);
+  dv.setUint32(24, sr, true); dv.setUint32(28, sr * ch * 2, true);
+  dv.setUint16(32, ch * 2, true); dv.setUint16(34, 16, true);
+  w(36,'data'); dv.setUint32(40, bytes, true);
+  new Uint8Array(buf, 44).set(pcm);
+  return buf;
+}
+/* 截取片段：返回 {data:ArrayBuffer, b:片段终点秒}。
+   片段 [a,b]：a = max(0, p-15)，b = a+15（封顶歌曲长度）；
+   p<15 时取歌曲开头 15s，锚点由调用方用 tAdj 补偿（b - p）。 */
+async function _plExtractClip(pAtClick){
+  const it = _plItems[_plIdx];
+  const dur = playerAudio.duration;
+  const p = pAtClick || 0;
+  const a = Math.max(0, p - 15);
+  const b = Math.min(dur, a + 15);
+  const ext = (((it.file && it.file.name) || it.name || '').split('.').pop() || '').toLowerCase();
+  let file = it.file;
+  if (!file && it.url){   // 云端直链播放（未下载到本机）：整段拉回再裁
+    setStatus('⬇ 正在拉取音频用于识别…');
+    const res = await fetch(it.url);
+    if (!res.ok) throw new Error('音频下载失败 HTTP ' + res.status);
+    file = await res.blob();
+  }
+  if (!file) throw new Error('找不到音频文件');
+  if (ext === 'mp3' || ext === 'flac'){
+    const isFlac = ext === 'flac';
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    const tagSz = isFlac ? 0 : _plId3v2Size(head);
+    const audioBytes = Math.max(1, file.size - tagSz);
+    const sB = tagSz + Math.floor(a / dur * audioBytes);
+    const eB = Math.min(file.size, tagSz + Math.ceil(b / dur * audioBytes));
+    let u8 = new Uint8Array(await file.slice(sB, eB).arrayBuffer());
+    const si = _plFindSync(u8, isFlac);
+    if (si > 0) u8 = u8.subarray(si);   // 对齐到真实帧头（修正码率估算误差）
+    return { data: u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength), b };
+  }
+  if (ext === 'wav'){
+    const hbuf = await file.slice(0, 4096).arrayBuffer();
+    const dv = new DataView(hbuf), u8h = new Uint8Array(hbuf);
+    const tag4 = o => String.fromCharCode(u8h[o], u8h[o+1], u8h[o+2], u8h[o+3]);
+    let sr = 44100, ch = 1, bits = 16, dataOff = -1, dataLen = 0;
+    for (let off = 12; off + 8 <= hbuf.byteLength;){
+      const id = tag4(off), sz = dv.getUint32(off + 4, true);
+      if (id === 'fmt '){
+        ch = dv.getUint16(off + 10, true);
+        sr = dv.getUint32(off + 12, true);
+        bits = dv.getUint16(off + 22, true);
+      } else if (id === 'data'){ dataOff = off + 8; dataLen = sz; break; }
+      off += 8 + sz + (sz & 1);
+    }
+    if (dataOff < 0 || bits !== 16 || ch < 1 || ch > 2){
+      throw new Error('该 WAV 格式暂不支持直读，建议转 mp3');
+    }
+    const byteRate = sr * ch * 2;
+    const s0 = Math.max(0, Math.floor(a * byteRate));
+    const s1 = Math.min(dataLen, Math.ceil(b * byteRate));
+    const pcm = new Uint8Array(await file.slice(dataOff + s0, dataOff + s1).arrayBuffer());
+    return { data: _plWrapWav(pcm, sr, ch), b };
+  }
+  // 容器格式（m4a/ogg/opus/aac…）：全量解码 → 单声道 16bit WAV
+  if (dur > 900) throw new Error('该格式文件过长（' + Math.round(dur/60) + '分钟），解码内存不足，建议转 mp3');
+  setStatus('⏳ 正在解码音频（' + ext.toUpperCase() + '）…');
+  const whole = await file.arrayBuffer();
+  ensureAudioCtx();
+  const ab = await audioCtx.decodeAudioData(whole.slice(0));
+  const sr = ab.sampleRate;
+  const s0 = Math.max(0, Math.floor(a * sr));
+  const s1 = Math.min(ab.length, Math.ceil(b * sr));
+  const n = Math.max(1, s1 - s0);
+  const out = new Int16Array(n);
+  const c0 = ab.getChannelData(0);
+  const c1 = ab.numberOfChannels > 1 ? ab.getChannelData(1) : null;
+  for (let i = 0; i < n; i++){
+    const s = c1 ? (c0[s0+i] + c1[s0+i]) * 0.5 : c0[s0+i];
+    out[i] = s < -1 ? -32768 : s > 1 ? 32767 : Math.round(s * 32767);
+  }
+  return { data: encodeWavI16(out, sr), b };
+}
+async function _plFileRecognize(isAuto){
+  const it = _plItems[_plIdx];
+  if (!it || _plIdx < 0) return { type: 'failed', msg: '播放器未在播放歌曲' };
+  const dur = playerAudio.duration;
+  if (!isFinite(dur) || dur <= 0){
+    if (!isAuto) setStatus('⏳ 歌曲尚未加载完成，稍候 1~2 秒再点识别');
+    return { type: 'precheck' };
+  }
+  if (!isAuto){ setRecogBusy(); setStatus('🔎 正在从本地文件截取 15 秒识别……'); }
+  try {
+    const t0 = performance.now() / 1000;      // 点击时刻（墙钟秒）
+    const pAtClick = playerAudio.currentTime || 0;
+    const clip = await _plExtractClip(pAtClick);
+    const audioB64 = await arrayBufferToBase64(clip.data);
+    let r;
+    try {
+      const res = await fetch(API_BASE + '/api/recognize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: audioB64 }),
+      });
+      r = await res.json();
+    } catch(e){ r = { ok: false, error: '网络错误: ' + e }; }
+    /* 锚点补偿：handleCloudResult 公式 songSecNow = anchor.songSecAtClick + (now - t0)
+       服务端 anchor ≈ 片段终点 b（歌曲内秒）。片段终点若不等于点击位置 p，
+       把 t0 平移成 t0 + (b - p)，使公式结果恒等于 p + (now - t0)。 */
+    const tAdj = t0 + ((clip.b || 0) - pAtClick);
+    const ret = handleCloudResult(r, tAdj);
+    setRecogIdle();
+    return ret;
+  } catch(e){
+    setRecogIdle();
+    setStatus('⚠ 本地识别失败：' + ((e && e.message) || e));
+    return { type: 'error' };
+  }
+}
+
+/* ============================================================
  * v3.46 云端 API：手机麦克风 WAV → Worker 识别 / 搜索
  * ============================================================ */
 async function cloudRecognize(isAuto){
+  /* v3.90 播放器模式：直接读本地文件识别，不再请求麦克风 */
+  if (state.source === 'player' && _plIdx >= 0){
+    return _plFileRecognize(isAuto);
+  }
   if (!micStream){
     if (isAuto) return { type: 'failed', msg: '麦克风未开启' };
     // v3.46 麦克风入口在设置面板内 → 点识别即在点击手势内自动请求授权
@@ -3443,7 +3665,17 @@ function positionHistory(){
   historyPanel.style.bottom = '';
   historyPanel.style.width = '';
   const r = subsSearch.getBoundingClientRect();
-  if (window.matchMedia('(max-width:820px)').matches){
+  if (_isRot90()){
+    /* v3.90 强制横屏：fixed 相对旋转后的 body 定位，全部换到 body 坐标系 */
+    if (window.matchMedia('(max-width:820px)').matches){
+      historyPanel.style.left = '10px';
+      historyPanel.style.right = '10px';
+      historyPanel.style.bottom = (r.right + 6) + 'px';   // body 高=innerWidth，r_body.top=innerWidth-r.right
+    } else {
+      historyPanel.style.left = r.top + 'px';
+      historyPanel.style.top = (window.innerWidth - r.left + 6) + 'px';
+    }
+  } else if (window.matchMedia('(max-width:820px)').matches){
     historyPanel.style.left = '10px';
     historyPanel.style.right = '10px';
     historyPanel.style.bottom = (window.innerHeight - r.top + 6) + 'px';
@@ -3890,6 +4122,29 @@ function reflectPanel(){
 hideBtn.addEventListener('click', () => { pinned = false; reflectPanel(); });
 showBtn.addEventListener('click', e => { e.stopPropagation(); pinned = true; reflectPanel(); });
 
+/* ============================================================
+   v3.90 强制横屏切换：手机没开「自动旋转」也能横屏使用。
+   iOS 不支持 screen.orientation.lock，改用 CSS 整体旋转 90°
+   （html.rot90 body，见 index.html），画布与手势坐标在 resize/_rotXY 换算。
+   状态存 localStorage，刷新后保持。 */
+const rotBtn = document.getElementById('rotBtn');
+if (rotBtn){
+  const _rotApply = on => {
+    document.documentElement.classList.toggle('rot90', on);
+    rotBtn.classList.toggle('active', on);
+    rotBtn.innerHTML = on ? '📱 竖屏' : '🔄 横屏';
+    rotBtn.title = on ? '恢复竖屏' : '强制横屏（手机未开自动旋转也能横过来用）';
+    resize();
+  };
+  if (localStorage.getItem('pb_rot90') === '1') _rotApply(true);
+  rotBtn.addEventListener('click', () => {
+    const on = !_isRot90();
+    try { localStorage.setItem('pb_rot90', on ? '1' : '0'); } catch(e){}
+    _rotApply(on);
+    setStatus(on ? '🔄 已强制横屏（把手机横过来拿）' : '📱 已恢复竖屏');
+  });
+}
+
 // v3.46d 收起/沉浸态下，点击屏幕任意处重新召唤控制台按钮（点按钮本身除外）
 document.addEventListener('click', e => {
   if (pinned) return;
@@ -4126,11 +4381,12 @@ canvas.addEventListener('pointerdown', e => {
   // v3.46d 收起/沉浸态：点按仅用于召唤控制台，不启动歌词拖拽
   if (!pinned) return;
   if (!state.lyrics.lines.length || state.lyrics.hidden) return;
-  beginDragSeek(e.clientY, e.clientX);
+  const p = _rotXY(e);   // v3.90 强制横屏：屏幕坐标→画布坐标
+  beginDragSeek(p.clientY, p.clientX);
   try { canvas.setPointerCapture(e.pointerId); } catch(_){}
 });
 canvas.addEventListener('pointermove', e => {
-  if (dragSeek.active) updateDragSeek(e.clientY, e.clientX);
+  if (dragSeek.active){ const p = _rotXY(e); updateDragSeek(p.clientY, p.clientX); }
 });
 function _endDragSeek(){
   if (!dragSeek.active) return;

@@ -22,6 +22,17 @@
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{width:100%;height:100%;overflow:hidden;background:#000;color:#fff;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;-webkit-user-select:none;user-select:none}
   canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;touch-action:none}
+  /* v3.90 强制横屏：iOS 不支持 screen.orientation.lock，用整体旋转 90° 实现。
+     body 旋转后，内部所有 fixed 元素改为相对 body 定位 → 整个 UI 跟着转；
+     画布尺寸由 app.js resize() 按「宽=innerHeight、高=innerWidth」重算。
+     关闭动画防旋转瞬间闪屏。 */
+  html.rot90 body{
+    position:absolute;top:0;left:0;
+    transform:translateX(100vw) rotate(90deg);
+    transform-origin:top left;
+    width:100vh;height:100vw;
+  }
+  html.rot90 canvas{width:100%;height:100%}
   /* v3.81 手势按钮覆盖层：拖歌词时「锁定/编辑/解锁」按钮画在这里，压在设置/播放器面板之上 */
   #lockOverlay{position:fixed;inset:0;z-index:45;pointer-events:none;display:none}
 
@@ -700,9 +711,11 @@
     <button class="btn" id="matchVersionBtn" style="display:none" title="歌词不对？点一下换版本；只有一个版本时按歌名重新搜索更多版本">🎯 歌词版本更换</button>
     <button class="btn" id="lockLyricsBtn" style="display:none" title="把当前歌词锁定到这个播放位置；下次播到此处自动加载，且不再自动识别（可在设置里拖动调整起止时间）">&#x1F512; 锁定歌词</button>
   </div>
-  <!-- 右上角竖排：①缩小 ②全屏 ③识别歌曲 ④设置 -->
+  <!-- 右上角竖排：①缩小 ②横竖屏 ③全屏 ④识别歌曲 ⑤设置 -->
   <div class="row" id="sideBtnRow">
     <button class="btn" id="hideBtn" title="收起工具栏">— 缩小</button>
+    <!-- v3.90 强制横屏切换（系统未开旋转锁定也能横屏） -->
+    <button class="btn" id="rotBtn" title="强制横屏（手机未开自动旋转也能横过来用）/ 恢复竖屏">🔄 横屏</button>
     <button class="btn" id="fsBtn" title="全屏 / 退出全屏">⛶ 全屏</button>
     <button class="btn" id="recogBtn" title="录15秒识别当前歌曲并自动加载歌词"><span class="recog-fill"></span><span class="recog-label"><span class="recog-note">&#x266A;&#xFE0E;</span> 识别歌曲</span></button>
     <button class="btn" id="settingsBtn" title="打开设置：音源/配色/歌词开关/自动跟随等">⚙ 设置</button>
