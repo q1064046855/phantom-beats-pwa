@@ -18,6 +18,15 @@ if ('serviceWorker' in navigator &&
     (location.protocol === 'https:' ||
      location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
   addEventListener('load', () => {
+    // v3.92：新版 SW skipWaiting+claim 接管后，页面自动重载一次（防旧 SW 缓存
+    // 让用户一直跑旧 app.js）；sessionStorage 标志防止极端情况下重载循环
+    let reloaded = false;
+    try { reloaded = sessionStorage.getItem('pb_sw_reload') === '1'; } catch(e) {}
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloaded) return;
+      try { sessionStorage.setItem('pb_sw_reload', '1'); } catch(e) {}
+      location.reload();
+    });
     navigator.serviceWorker.register('sw.js').catch(() => {});
   });
 }
