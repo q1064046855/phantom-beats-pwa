@@ -439,10 +439,10 @@ async function handleSearch(q){
 const nodeCrypto = require('crypto');
 function cosCfg(){
   return {
-    id: process.env.COS_SECRET_ID || '',
-    key: process.env.COS_SECRET_KEY || '',
-    bucket: process.env.COS_BUCKET || '',
-    region: process.env.COS_REGION || 'ap-guangzhou',
+    id: (process.env.COS_SECRET_ID || '').trim(),
+    key: (process.env.COS_SECRET_KEY || '').trim(),
+    bucket: (process.env.COS_BUCKET || '').trim(),
+    region: (process.env.COS_REGION || 'ap-guangzhou').trim(),
   };
 }
 function cosReady(cfg){ return !!(cfg.id && cfg.key && cfg.bucket); }
@@ -518,7 +518,7 @@ async function handleCloudList(){
     const res = await cosFetch(cfg, 'GET', '/',
       { 'list-type': '2', 'max-keys': '1000', 'prefix': 'songs/' });
     const xml = await res.text();
-    if (!res.ok) return J({ ok: false, error: 'COS 列表失败 HTTP ' + res.status });
+    if (!res.ok) return J({ ok: false, error: 'COS 列表失败 HTTP ' + res.status + ' ' + xml.slice(0, 260) });
     const items = parseCosListXml(xml)
       .map(it => {
         const p = it.key.lastIndexOf('|');
@@ -553,7 +553,8 @@ async function handleCloudDelete(body){
   const keys = Array.isArray(body.keys) ? body.keys.filter(k => typeof k === 'string' && k) : [];
   if (!keys.length) return J({ ok: false, error: 'keys 为空' });
   const results = await Promise.all(keys.map(async k => {
-    const targets = ['/songs/' + cosEnc(k), '/locks/' + cosEnc(k) + '.json'];
+    const clean = k.replace(/^songs\//, '');   // 前端传的是完整云键（带 songs/ 前缀），容错剥离
+    const targets = ['/songs/' + cosEnc(clean), '/locks/' + cosEnc(clean) + '.json'];
     let okN = 0;
     for (const uri of targets){
       try{

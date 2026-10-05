@@ -1476,7 +1476,7 @@ function _plOnlineDelete(it){
     if (!j.ok){ setStatus('⚠️ 删除失败：' + (j.error || j)); return; }
     _plOnlineList = _plOnlineList.filter(x => x.key !== it.key);
     // 本地曲库引用与本地锁定同步移除（云端锁已由服务端一并删除）
-    const k = it.key;
+    const k = it.key.replace(/^songs\//, '');   // 云键剥掉 songs/ 前缀后才是本地锁键
     delete _plLocks[k];
     idbPut('meta', 'locks', _plLocks).catch(() => {});
     const idx = _plItems.findIndex(x => _plKey(x) === k && x.online);
