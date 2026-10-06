@@ -9,9 +9,9 @@
  *   · cloud-songs-v1（v3.92 云端歌曲后台缓存）= 跨 SW 版本永久保留
  * 注：Service Worker 仅在 HTTPS / localhost 生效；局域网 http://IP 访问时浏览器
  *     会拒绝注册，页面自动跳过，一切功能不受影响。 */
-const CACHE = 'pb-v4.05';
+const CACHE = 'pb-v4.09';
 const KEEP = ['cloud-songs-v1'];              // 跨版本保留的缓存
-const SHELL = ['./', './index.html', './app.js?v=v4.05', './icon-192.png', './icon-512.png'];
+const SHELL = ['./', './index.html', './app.js?v=v4.09', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(
